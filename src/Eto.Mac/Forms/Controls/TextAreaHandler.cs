@@ -124,12 +124,14 @@ namespace Eto.Mac.Forms.Controls
 				{
 					if (Control.Window != null)
 						Control.Window.SelectNextKeyView(Control);
+					e.Handled = true;
 					return;
 				}
 				if (e.KeyData == (Keys.Tab | Keys.Shift))
 				{
 					if (Control.Window != null)
 						Control.Window.SelectPreviousKeyView(Control);
+					e.Handled = true;
 					return;
 				}
 			}
