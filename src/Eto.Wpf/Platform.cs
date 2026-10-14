@@ -26,7 +26,7 @@ namespace Eto.Wpf
 
 		static Platform()
 		{
-			EmbeddedAssemblyLoader.Register("Eto.Wpf.CustomControls.Assemblies");
+			EmbeddedAssemblyLoader.Register("Eto.Wpf.CustomControls.Assemblies", typeof(Platform).Assembly);
 
 			Style.Add<ThemedSegmentedButtonHandler>(null, h =>
 			{
