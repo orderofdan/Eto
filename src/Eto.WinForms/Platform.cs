@@ -24,7 +24,7 @@ namespace Eto.WinForms
 
 		static Platform()
 		{
-			EmbeddedAssemblyLoader.Register("Eto.WinForms.CustomControls.Assemblies");
+			EmbeddedAssemblyLoader.Register("Eto.WinForms.CustomControls.Assemblies", typeof(Platform).Assembly);
 		}
 
 		public Platform()
