@@ -94,8 +94,10 @@ namespace Eto.Wpf.Forms
 		where TWidget : Control
 		where TCallback : Control.ICallback
 	{
+		bool _needsThemeChanged;
 		Size? newSize;
 		sw.Size parentMinimumSize;
+		HwndSource _mouseHWheelSource;
 		bool isMouseOver;
 		bool isMouseCaptured;
 		public bool XScale { get; private set; }
@@ -109,12 +111,31 @@ namespace Eto.Wpf.Forms
 				return hwnd != null ? hwnd.Handle : IntPtr.Zero;
 			}
 		}
+		
+		protected virtual bool ContainsScrollViewer => false;
 
 		public virtual sw.Size MeasureOverride(sw.Size constraint, Func<sw.Size, sw.Size> measure)
 		{
 			// enforce eto-style sizing to wpf controls
 			var size = UserPreferredSize;
 			var control = ContainerControl;
+
+			var parentWindow = Widget.ParentWindow;
+			if (ContainsScrollViewer && parentWindow?.AutoSize == true && parentWindow.WindowState == WindowState.Normal)
+			{
+				// The enclosed scrollable is measured with this constraint, which becomes its viewport size.
+				// In an auto-sizing window the content is probed with the monitor size, so without constraining
+				// to the preferred size here the scroll viewer would measure its content as fitting that huge
+				// space and not show scrollbars. When NOT auto-sizing, the constraint is the real space the
+				// control will be arranged to, so we must NOT constrain it or the content won't expand to fill
+				// the scrollable area when the control is scaled larger than its preferred size.
+				// Also skip when the auto-size window is maximized: it then has a fixed (screen) size the content
+				// should fill, so constraining to the preferred size would pin the content until it's re-measured.
+				if (!double.IsPositiveInfinity(constraint.Width) && size.Width >= 0 && size.Width < constraint.Width)
+					constraint.Width = size.Width;
+				if (!double.IsPositiveInfinity(constraint.Height) && size.Height >= 0 && size.Height < constraint.Height)
+					constraint.Height = size.Height;
+			}
 
 			// Constrain content to the preferred size of this control, if specified.
 			var desired = measure(constraint.IfInfinity(size.InfinityIfNan()));
@@ -171,6 +192,8 @@ namespace Eto.Wpf.Forms
 		public virtual bool UseKeyPreview => false;
 
 		public virtual bool UseDragDropPreview => UseMousePreview;
+
+		protected virtual bool SuppressKeyEvents => false;
 
 		public sw.Size ParentMinimumSize
 		{
@@ -378,6 +401,19 @@ namespace Eto.Wpf.Forms
 
 		protected virtual sw.FrameworkElement KeyEventControl => Control;
 
+		/// <summary>
+		/// An additional element to hook the key events on, for when the routed event does not pass
+		/// through <see cref="KeyEventControl"/> at all.
+		/// </summary>
+		/// <remarks>
+		/// Windows hook their key events on an inner element so they are seen before the window's own
+		/// input bindings (menu shortcuts) can mark them as handled. That element is only in the route
+		/// when something inside the content has keyboard focus, so when focus is on the window itself
+		/// the key events would otherwise never be raised. Events from this element are ignored when
+		/// they already went through <see cref="KeyEventControl"/>.
+		/// </remarks>
+		protected virtual sw.FrameworkElement FallbackKeyEventControl => null;
+
 		public virtual void Focus()
 		{
 			if (FocusControl.IsLoaded)
@@ -463,6 +499,9 @@ namespace Eto.Wpf.Forms
 					break;
 				case Eto.Forms.Control.MouseWheelEvent:
 					ContainerControl.PreviewMouseWheel += HandlePreviewMouseWheel;
+					ContainerControl.Loaded += HandleMouseWheelLoaded;
+					ContainerControl.Unloaded += HandleMouseWheelUnloaded;
+					AddMouseHWheelHook();
 					break;
 				case Eto.Forms.Control.SizeChangedEvent:
 					ContainerControl.SizeChanged += HandleSizeChanged;
@@ -478,12 +517,19 @@ namespace Eto.Wpf.Forms
 						KeyEventControl.KeyDown += HandleKeyDown;
 						KeyEventControl.TextInput += HandleTextInput;
 					}
+					if (FallbackKeyEventControl is sw.FrameworkElement fallbackKeyDown)
+					{
+						fallbackKeyDown.KeyDown += HandleFallbackKeyDown;
+						fallbackKeyDown.TextInput += HandleFallbackTextInput;
+					}
 					break;
 				case Eto.Forms.Control.TextInputEvent:
 					HandleEvent(Eto.Forms.Control.KeyDownEvent);
 					break;
 				case Eto.Forms.Control.KeyUpEvent:
 					KeyEventControl.KeyUp += HandleKeyUp;
+					if (FallbackKeyEventControl is sw.FrameworkElement fallbackKeyUp)
+						fallbackKeyUp.KeyUp += HandleFallbackKeyUp;
 					break;
 				case Eto.Forms.Control.ShownEvent:
 					ContainerControl.IsVisibleChanged += HandleIsVisibleChanged;
@@ -525,12 +571,28 @@ namespace Eto.Wpf.Forms
 					// handled in DoDragDrop, as it is blocking on Windows
 					break;
 				case Eto.Forms.Control.EnabledChangedEvent:
-					Control.IsEnabledChanged += Control_IsEnabledChanged;
+					// Enabled is set on the container, which isn't always the same as Control (and Control
+					// may not even be in the visual tree yet, e.g. an empty TableLayout), so watch that instead.
+					ContainerControl.IsEnabledChanged += Control_IsEnabledChanged;
+					break;
+				case Eto.Forms.Control.ThemeChangedEvent:
+					if (_needsThemeChanged)
+						return;
+					_needsThemeChanged = true;
+					if (Widget.Loaded)
+					{
+						Application.Instance.ThemeChanged += HandleThemeChanged;
+					}
 					break;
 				default:
 					base.AttachEvent(id);
 					break;
 			}
+		}
+
+		private void HandleThemeChanged(object sender, EventArgs e)
+		{
+			Callback.OnThemeChanged(Widget, EventArgs.Empty);
 		}
 
 		private void HandleIsKeyboardFocusWithinChanged(object sender, sw.DependencyPropertyChangedEventArgs e)
@@ -551,6 +613,51 @@ namespace Eto.Wpf.Forms
 			var args = e.ToEto(Control);
 			Callback.OnMouseWheel(Widget, args);
 			e.Handled = args.Handled;
+		}
+
+		const int WM_MOUSEHWHEEL = 0x020E;
+
+		private void HandleMouseWheelLoaded(object sender, sw.RoutedEventArgs e)
+		{
+			AddMouseHWheelHook();
+		}
+
+		private void HandleMouseWheelUnloaded(object sender, sw.RoutedEventArgs e)
+		{
+			RemoveMouseHWheelHook();
+		}
+
+		void AddMouseHWheelHook()
+		{
+			if (_mouseHWheelSource != null || ContainerControl == null)
+				return;
+			_mouseHWheelSource = sw.PresentationSource.FromVisual(ContainerControl) as HwndSource;
+			_mouseHWheelSource?.AddHook(MouseHWheelHook);
+		}
+
+		void RemoveMouseHWheelHook()
+		{
+			if (_mouseHWheelSource == null)
+				return;
+			_mouseHWheelSource.RemoveHook(MouseHWheelHook);
+			_mouseHWheelSource = null;
+		}
+
+		IntPtr MouseHWheelHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+		{
+			if (msg != WM_MOUSEHWHEEL || Control == null || ContainerControl?.IsMouseOver != true)
+				return IntPtr.Zero;
+
+			var delta = -GetWheelDelta(wParam) / WpfConversions.WheelDelta;
+			var args = new MouseEventArgs(Mouse.Buttons, Keyboard.Modifiers, PointFromScreen(Mouse.Position), new SizeF(delta, 0));
+			Callback.OnMouseWheel(Widget, args);
+			handled = args.Handled;
+			return IntPtr.Zero;
+		}
+
+		static int GetWheelDelta(IntPtr wParam)
+		{
+			return (short)(((long)wParam >> 16) & 0xFFFF);
 		}
 
 		private void HandleIsVisibleChanged(object sender, sw.DependencyPropertyChangedEventArgs e)
@@ -767,8 +874,37 @@ namespace Eto.Wpf.Forms
 			return new WpfDragEventArgs(source, dragData, data.AllowedEffects.ToEto(), location, modifiers, buttons, controlObject);
 		}
 
+		/// <summary>
+		/// The routed args last seen by the primary key handlers, so the fallback handlers can tell
+		/// whether the event already went through <see cref="KeyEventControl"/>.
+		/// </summary>
+		/// <remarks>
+		/// <see cref="KeyEventControl"/> is always hit before <see cref="FallbackKeyEventControl"/>,
+		/// either as a descendant of it in the bubbling route, or via the tunneling preview event.
+		/// </remarks>
+		object _lastKeyEventArgs;
+
+		void HandleFallbackKeyDown(object sender, swi.KeyEventArgs e)
+		{
+			if (!ReferenceEquals(_lastKeyEventArgs, e))
+				HandleKeyDown(sender, e);
+		}
+
+		void HandleFallbackKeyUp(object sender, swi.KeyEventArgs e)
+		{
+			if (!ReferenceEquals(_lastKeyEventArgs, e))
+				HandleKeyUp(sender, e);
+		}
+
+		void HandleFallbackTextInput(object sender, swi.TextCompositionEventArgs e)
+		{
+			if (!ReferenceEquals(_lastKeyEventArgs, e))
+				HandleTextInput(sender, e);
+		}
+
 		void HandleTextInput(object sender, swi.TextCompositionEventArgs e)
 		{
+			_lastKeyEventArgs = e;
 			var tiargs = new TextInputEventArgs(e.Text);
 			Callback.OnTextInput(Widget, tiargs);
 			if (tiargs.Cancel)
@@ -788,6 +924,10 @@ namespace Eto.Wpf.Forms
 
 		void HandleKeyDown(object sender, swi.KeyEventArgs e)
 		{
+			_lastKeyEventArgs = e;
+			if (SuppressKeyEvents)
+				return;
+
 			var args = e.ToEto(KeyEventType.KeyDown);
 			if (args.KeyData != Keys.None)
 			{
@@ -798,6 +938,10 @@ namespace Eto.Wpf.Forms
 
 		void HandleKeyUp(object sender, swi.KeyEventArgs e)
 		{
+			_lastKeyEventArgs = e;
+			if (SuppressKeyEvents)
+				return;
+
 			var args = e.ToEto(KeyEventType.KeyUp);
 			if (args.KeyData != Keys.None)
 			{
@@ -847,7 +991,10 @@ namespace Eto.Wpf.Forms
 				// this can happen when something happens during the mouse dragging, such as showing a dialog.
 				isMouseCaptured = false;
 
-				var args = e.ToEto(ContainerControl, swi.MouseButtonState.Released);
+				// MouseButtons.None is passed as the user may not have released the button yet,
+				// so it isn't mistakenly taken as a mouse click.
+				var location = e.GetPosition(ContainerControl).ToEto();
+				var args = new MouseEventArgs(MouseButtons.None, swi.Keyboard.Modifiers.ToEto(), location);
 				Callback.OnMouseUp(Widget, args);
 			}
 		}
@@ -891,6 +1038,11 @@ namespace Eto.Wpf.Forms
 			if (Widget.IsAttached)
 			{
 				SetDefaultScale();
+			}
+			
+			if (_needsThemeChanged)
+			{
+				Application.Instance.ThemeChanged += HandleThemeChanged;
 			}
 		}
 
@@ -948,6 +1100,11 @@ namespace Eto.Wpf.Forms
 
 		public virtual void OnUnLoad(EventArgs e)
 		{
+			if (_needsThemeChanged)
+			{
+				Application.Instance.ThemeChanged -= HandleThemeChanged;
+			}
+			
 			if (NeedsPixelSizeNotifications && Win32.PerMonitorDpiSupported)
 			{
 				var parent = ParentWindow;
@@ -978,9 +1135,19 @@ namespace Eto.Wpf.Forms
 
 		System.Windows.Forms.Screen SwfScreen => Win32.GetScreenFromWindow(Widget.ParentWindow?.NativeHandle ?? IntPtr.Zero);
 
+		/// <summary>
+		/// Determines if the control can be translated to/from screen co-ordinates.
+		/// </summary>
+		/// <remarks>
+		/// WPF raises its Loaded event at <see cref="sw.Threading.DispatcherPriority.Loaded"/>, so its IsLoaded can still
+		/// be false right after a control has been added, measured and arranged (e.g. after Control.UpdateLayout()).
+		/// Eto's Loaded state is already set at that point, so check both to translate as soon as it is possible.
+		/// </remarks>
+		bool CanTranslateToScreen => ContainerControl.IsLoaded || Widget.Loaded;
+
 		public PointF PointFromScreen(PointF point)
 		{
-			if (!ContainerControl.IsLoaded)
+			if (!CanTranslateToScreen)
 				return point;
 
 			// ensure we're connected to a presentation source
@@ -1014,7 +1181,7 @@ namespace Eto.Wpf.Forms
 
 		public PointF PointToScreen(PointF point)
 		{
-			if (!ContainerControl.IsLoaded)
+			if (!CanTranslateToScreen)
 				return point;
 
 			// ensure we're connected to a presentation source
@@ -1059,6 +1226,12 @@ namespace Eto.Wpf.Forms
 		{
 			get { return swi.KeyboardNavigation.GetTabIndex(TabControl); }
 			set { swi.KeyboardNavigation.SetTabIndex(TabControl, value); }
+		}
+
+		public virtual bool TabStop
+		{
+			get { return swi.KeyboardNavigation.GetIsTabStop(TabControl); }
+			set { swi.KeyboardNavigation.SetIsTabStop(TabControl, value); }
 		}
 
 		public virtual IEnumerable<Control> VisualControls => Enumerable.Empty<Control>();
@@ -1175,7 +1348,11 @@ namespace Eto.Wpf.Forms
 		public void UpdateLayout()
 		{
 			// allow WPF controls to actually get their Loaded event fired.
-			ContainerControl.Dispatcher.Invoke(new Action(() => { }), sw.Threading.DispatcherPriority.ApplicationIdle, null);
+			// Skip when already loaded: ApplicationIdle priority never drains
+			// during a host modal sizing/move loop (DefWindowProc's pump doesn't
+			// reach idle), so this Invoke would deadlock the caller.
+			if (!ContainerControl.IsLoaded)
+				ContainerControl.Dispatcher.Invoke(new Action(() => { }), sw.Threading.DispatcherPriority.Loaded, null);
 
 			// update the layout
 			ContainerControl.UpdateLayout();
@@ -1217,5 +1394,33 @@ namespace Eto.Wpf.Forms
 			return ContainerControl.CaptureMouse();
 		}
 		public void ReleaseMouseCapture() => ContainerControl.ReleaseMouseCapture();
+		public virtual void AddGesture(Gesture item)
+		{
+			if (item == null)
+				throw new ArgumentNullException(nameof(item));
+
+			var handler = ((IHandlerSource)item).Handler as Eto.Wpf.Forms.Controls.IWpfGestureHandler;
+			if (handler == null)
+				throw new NotSupportedException($"Gesture '{item.GetType().FullName}' is not supported on WPF");
+
+			handler.AttachTo(ContainerControl);
+		}
+
+		public virtual void ClearGestures()
+		{
+			foreach (var gesture in Widget.Gestures)
+			{
+				if (((IHandlerSource)gesture).Handler is Eto.Wpf.Forms.Controls.IWpfGestureHandler handler)
+					handler.Detach();
+			}
+		}
+
+		public virtual void RemoveGesture(Gesture item)
+		{
+			if (item == null)
+				return;
+			if (((IHandlerSource)item).Handler is Eto.Wpf.Forms.Controls.IWpfGestureHandler handler)
+				handler.Detach();
+		}
 	}
 }

@@ -245,9 +245,17 @@ namespace Eto.Test.UnitTests.Forms.Controls
 				reference = new WeakReference(obj);
 				obj = null;
 			});
-			Thread.Sleep(100);
-			GC.Collect();
-			GC.WaitForPendingFinalizers();
+			// Some platforms only drop their own reference to the control once a posted message has been
+			// processed, so retry for a short while instead of always paying a fixed delay - this test has
+			// ~60 cases, so an unconditional sleep here is a large chunk of the whole suite's runtime.
+			for (int i = 0; ; i++)
+			{
+				GC.Collect();
+				GC.WaitForPendingFinalizers();
+				if (reference?.IsAlive != true || i >= 10)
+					break;
+				Thread.Sleep(10);
+			}
 			Assert.That(reference, Is.Not.Null);
 			Assert.That(reference.Target, Is.Null);
 			Assert.That(reference.IsAlive, Is.False);
@@ -369,16 +377,25 @@ namespace Eto.Test.UnitTests.Forms.Controls
 		[TestCaseSource(nameof(GetControlTypes)), InvokeOnUI]
 		public void ControlsShouldHavePreferredSize(IControlTypeInfo<Control> info)
 		{
-			var control = info.CreatePopulatedControl();
-			var size = control.GetPreferredSize();
-			Console.WriteLine($"PreferredSize for {info.Type}: {size}");
-			Assert.That(size.Width, Is.GreaterThan(0), "#1.1 - Preferred width should be greater than zero");
-			Assert.That(size.Height, Is.GreaterThan(0), "#1.2 - Preferred height should be greater than zero");
+			SizeF size = default;
+			SizeF containerSize = default;
 			var padding = new Padding(10);
-			var container = new Panel { Content = control, Padding = padding };
-			var containerSize = container.GetPreferredSize();
-			Assert.That(containerSize.Width, Is.EqualTo(size.Width + padding.Horizontal).Within(0.1), "#2.1 - panel with padding should have correct width");
-			Assert.That(containerSize.Height, Is.EqualTo(size.Height + padding.Vertical).Within(0.1), "#2.2 - panel with padding should have correct height");
+			// GTK/GLib criticals are written directly to the native stderr, so capture it to ensure
+			// getting the preferred size of an unparented control doesn't emit any (e.g. the
+			// "gtk_widget_realize: assertion 'widget->priv->anchored...' failed" critical on Gtk).
+			var output = StandardErrorCapture.Capture(() =>
+			{
+				var control = info.CreatePopulatedControl();
+				size = control.GetPreferredSize();
+				Console.WriteLine($"PreferredSize for {info.Type}: {size}");
+				var container = new Panel { Content = control, Padding = padding };
+				containerSize = container.GetPreferredSize();
+			});
+			Assert.That(output, Does.Not.Contain("CRITICAL"), $"#1.1 - A critical warning was emitted while getting the preferred size:{Environment.NewLine}{output}");
+			Assert.That(size.Width, Is.GreaterThan(0), "#2.1 - Preferred width should be greater than zero");
+			Assert.That(size.Height, Is.GreaterThan(0), "#2.2 - Preferred height should be greater than zero");
+			Assert.That(containerSize.Width, Is.EqualTo(size.Width + padding.Horizontal).Within(0.1), "#3.1 - panel with padding should have correct width");
+			Assert.That(containerSize.Height, Is.EqualTo(size.Height + padding.Vertical).Within(0.1), "#3.2 - panel with padding should have correct height");
 		}
 
 		[ManualTest]

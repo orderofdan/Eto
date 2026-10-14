@@ -18,6 +18,9 @@ namespace Eto.Mac
 		}
 
 		[DllImport(LIBOBJC_DYLIB, EntryPoint = "objc_msgSendSuper")]
+		public static extern IntPtr IntPtr_objc_msgSendSuper(IntPtr receiver, IntPtr selector);
+
+		[DllImport(LIBOBJC_DYLIB, EntryPoint = "objc_msgSendSuper")]
 		public static extern IntPtr IntPtr_objc_msgSendSuper_IntPtr(IntPtr receiver, IntPtr selector, IntPtr arg1);
 		
 		[DllImport(LIBOBJC_DYLIB, EntryPoint = "objc_msgSendSuper")]
@@ -102,6 +105,9 @@ namespace Eto.Mac
 		public static extern IntPtr IntPtr_objc_msgSend_IntPtr_IntPtr_IntPtr(IntPtr reciever, IntPtr selector, IntPtr arg1, IntPtr arg2, IntPtr arg3);
 
 		[DllImport(LIBOBJC_DYLIB, EntryPoint = "objc_msgSend")]
+		public static extern nuint nuint_objc_msgSend_CGPoint(IntPtr receiver, IntPtr selector, CGPoint arg1);
+
+		[DllImport(LIBOBJC_DYLIB, EntryPoint = "objc_msgSend")]
 		public static extern CGSize CGSize_objc_msgSend_CGSize_IntPtr_IntPtr_UInt64_UInt64_Int64(IntPtr receiver, IntPtr selector, CGSize arg1, IntPtr arg2, IntPtr arg3, ulong arg4, ulong arg5, long arg6);
 
 		[DllImport(LIBOBJC_DYLIB, EntryPoint = "objc_msgSendSuper")]
@@ -118,4 +124,3 @@ namespace Eto.Mac
 
 	}
 }
-

@@ -67,6 +67,7 @@ namespace Eto.GtkSharp.Forms
 		public static readonly object AllowDrop_Key = new object();
 		public static readonly object DeferMouseLeave_Key = new object();
 		public static readonly object IsMouseCaptured_Key = new object();
+		public static readonly object LostMouseCaptureAttached_Key = new object();
 		public static readonly object LastEnteredControls_Key = new object();
 		public static readonly object ShouldTranslatePoints_Key = new object();
 		internal static readonly object ContextMenu_Key = new object();
@@ -328,6 +329,7 @@ namespace Eto.GtkSharp.Forms
 				if (value && Widget.Loaded)
 				{
 					ContainerControl.ShowAll();
+					FireOnShown();
 				}
 			}
 		}
@@ -369,7 +371,38 @@ namespace Eto.GtkSharp.Forms
 
 		public virtual void OnLoad(EventArgs e)
 		{
+			if (Widget.VisualParent?.Loaded != false && !(Widget is Window))
+			{
+				// adding dynamically or loading without a parent (e.g. embedding into a native app)
+				Application.Instance.AsyncInvoke(FireOnShown);
+			}
 		}
+
+		// GTK maps children before their parent, so the ::map signal can't be used to raise Shown -
+		// it has to go top down like the other platforms. The window drives this when it is shown.
+		static void FireOnShown(Control control)
+		{
+			if (control.IsDisposed || !control.Visible)
+				return;
+
+			var handler = control.Handler as IGtkControl;
+			var isWindow = control is Window;
+
+			// Parent controls get shown event first, then children
+			if (!isWindow)
+				handler?.Callback.OnShown(control, EventArgs.Empty);
+
+			foreach (var ctl in control.VisualControls)
+			{
+				FireOnShown(ctl);
+			}
+
+			// Window fires shown after all child controls
+			if (isWindow)
+				handler?.Callback.OnShown(control, EventArgs.Empty);
+		}
+
+		protected internal virtual void FireOnShown() => FireOnShown(Widget);
 
 		public virtual void OnLoadComplete(EventArgs e)
 		{
@@ -417,10 +450,12 @@ namespace Eto.GtkSharp.Forms
 					EventControl.AddEvents((int)Gdk.EventMask.ButtonPressMask);
 					EventControl.AddEvents((int)Gdk.EventMask.ButtonReleaseMask);
 					EventControl.ButtonPressEvent += Connector.HandleButtonPressEvent;
+					AttachLostMouseCaptureEvents();
 					break;
 				case Eto.Forms.Control.MouseUpEvent:
 					EventControl.AddEvents((int)Gdk.EventMask.ButtonReleaseMask);
 					EventControl.ButtonReleaseEvent += Connector.HandleButtonReleaseEvent;
+					AttachLostMouseCaptureEvents();
 					break;
 				case Eto.Forms.Control.MouseEnterEvent:
 					EventControl.AddEvents((int)Gdk.EventMask.EnterNotifyMask);
@@ -450,7 +485,7 @@ namespace Eto.GtkSharp.Forms
 					EventControl.FocusOutEvent += Connector.FocusOutEvent;
 					break;
 				case Eto.Forms.Control.ShownEvent:
-					EventControl.Mapped += Connector.MappedEvent;
+					// raised by FireOnShown, not a native signal
 					break;
 				case Eto.Forms.Control.DragDropEvent:
 					DragControl.DragDrop += Connector.HandleDragDrop;
@@ -476,10 +511,50 @@ namespace Eto.GtkSharp.Forms
 					ContainerControl.StateFlagsChanged += Connector.HandleStateFlagsChangedForEnabled;
 #endif
 					break;
+				case Eto.Forms.Control.ThemeChangedEvent:
+					ContainerControl.StyleUpdated += Connector.HandleStyleUpdated;
+					break;
 				default:
 					base.AttachEvent(id);
 					return;
 			}
+		}
+
+		/// <summary>
+		/// Attaches the events used to detect when this control loses the mouse capture.
+		/// </summary>
+		/// <remarks>
+		/// Both MouseDown and MouseUp need this, so guard against attaching them twice.
+		/// </remarks>
+		void AttachLostMouseCaptureEvents()
+		{
+			if (Widget.Properties.Get<bool>(GtkControl.LostMouseCaptureAttached_Key))
+				return;
+			Widget.Properties.Set(GtkControl.LostMouseCaptureAttached_Key, true);
+			// a gtk grab elsewhere (e.g. showing a modal dialog) shadows this control
+			EventControl.GrabNotify += Connector.HandleGrabNotify;
+			// the gdk (device) grab was taken away, e.g. by another application or a drag operation
+			EventControl.GrabBrokenEvent += Connector.HandleGrabBrokenEvent;
+		}
+
+		/// <summary>
+		/// Triggers MouseUp when the mouse capture is lost without a button release being sent.
+		/// </summary>
+		/// <remarks>
+		/// This can happen when something takes the grab away in the middle of a drag, such as showing
+		/// a dialog.  GTK sends the button release to whatever has the grab instead of this control, so
+		/// without this any dragging logic in user code would never get a chance to unwind.
+		/// This is the equivalent of WPF's LostMouseCapture.
+		/// <see cref="MouseButtons.None"/> is passed as the user may not have released the button yet, so it
+		/// isn't mistakenly taken as a mouse click.
+		/// </remarks>
+		void TriggerMouseUpForLostCapture()
+		{
+			if (!IsMouseCaptured)
+				return;
+			IsMouseCaptured = false;
+			var location = Widget.PointFromScreen(Mouse.Position);
+			Callback.OnMouseUp(Widget, new MouseEventArgs(MouseButtons.None, Keyboard.Modifiers, location));
 		}
 
 		protected new GtkControlConnector Connector { get { return (GtkControlConnector)base.Connector; } }
@@ -650,6 +725,19 @@ namespace Eto.GtkSharp.Forms
 				args.RetVal = mouseArgs.Handled;
 			}
 
+			public void HandleGrabNotify(object o, Gtk.GrabNotifyArgs args)
+			{
+				// WasGrabbed is false when a grab was added elsewhere, so this control no longer gets events
+				if (!args.WasGrabbed)
+					Handler?.TriggerMouseUpForLostCapture();
+			}
+
+			[GLib.ConnectBefore]
+			public void HandleGrabBrokenEvent(object o, Gtk.GrabBrokenEventArgs args)
+			{
+				Handler?.TriggerMouseUpForLostCapture();
+			}
+
 			[GLib.ConnectBefore]
 			public virtual void HandleButtonPressEvent(object sender, Gtk.ButtonPressEventArgs args)
 			{
@@ -703,6 +791,89 @@ namespace Eto.GtkSharp.Forms
 
 			Gtk.IMContext context;
 			bool commitHandled;
+			string lastCompositionText;
+			bool? lastCompositionActive;
+
+			bool HandlesDrawableComposition(GtkControl<TControl, TWidget, TCallback> handler)
+			{
+				if (!(handler.Widget is Drawable))
+					return false;
+
+				return handler.IsEventHandled(Drawable.TextCompositionEvent) || handler.IsEventHandled(Drawable.TextInsertionBoundsRequestedEvent);
+			}
+			
+			void UpdateDrawableInputMethodLocation(GtkControl<TControl, TWidget, TCallback> handler)
+			{
+				if (!HandlesDrawableComposition(handler))
+					return;
+
+				var drawable = handler.Widget as Drawable;
+				var callback = handler.Callback as Drawable.ICallback;
+				var window = handler.EventControl?.GetWindow();
+				if (drawable == null || callback == null || window == null)
+					return;
+
+				Context.ClientWindow = window;
+
+				var args = new TextInsertionBoundsEventArgs();
+				callback.OnTextInsertionBoundsRequested(drawable, args);
+				var bounds = args.Bounds ?? new RectangleF(0, 0, 1, Math.Max(1, handler.EventControl.Allocation.Height));
+				if (bounds.Width <= 0)
+					bounds.Width = 1;
+				if (bounds.Height <= 0)
+					bounds.Height = 1;
+
+				Context.CursorLocation = new Gdk.Rectangle(
+					(int)Math.Floor(bounds.X),
+					(int)Math.Floor(bounds.Y),
+					(int)Math.Ceiling(bounds.Width),
+					(int)Math.Ceiling(bounds.Height)
+				);
+			}
+
+			void NotifyDrawableTextComposition(GtkControl<TControl, TWidget, TCallback> handler, string text, bool isActive)
+			{
+				if (!(handler.Widget is Drawable drawable) || !(handler.Callback is Drawable.ICallback callback))
+					return;
+
+				text = text ?? string.Empty;
+				if (lastCompositionActive == isActive && string.Equals(lastCompositionText, text, StringComparison.Ordinal))
+					return;
+
+				lastCompositionText = text;
+				lastCompositionActive = isActive;
+
+				var args = new TextCompositionEventArgs(text, isActive);
+				callback.OnTextComposition(drawable, args);
+				UpdateDrawableInputMethodLocation(handler);
+			}
+
+			public void CancelDrawableTextComposition()
+			{
+				var handler = Handler;
+				if (handler == null || !HandlesDrawableComposition(handler) || context == null)
+					return;
+
+				context.Reset();
+				NotifyDrawableTextComposition(handler, string.Empty, false);
+			}
+
+			public void CommitDrawableTextComposition()
+			{
+				var handler = Handler;
+				if (handler == null || !HandlesDrawableComposition(handler) || context == null)
+					return;
+
+				context.GetPreeditString(out var text, out _, out _);
+				if (!string.IsNullOrEmpty(text))
+				{
+					var tia = new TextInputEventArgs(text);
+					handler.Callback.OnTextInput(handler.Widget, tia);
+				}
+
+				context.Reset();
+				NotifyDrawableTextComposition(handler, string.Empty, false);
+			}
 
 			Gtk.IMContext Context
 			{
@@ -710,7 +881,39 @@ namespace Eto.GtkSharp.Forms
 				{
 					if (context != null)
 						return context;
-					context = new Gtk.IMContextSimple();
+					// Native TextBox/TextArea already own a system-IM (ibus) context on
+					// their GtkEntry/GtkTextView; a second focused IMMulticontext steals
+					// their input. Only Drawables (custom-drawn text) need a full IME
+					// here -- native widgets use the standalone IMContextSimple.
+					context = (Handler != null && HandlesDrawableComposition(Handler))
+						? (Gtk.IMContext)new Gtk.IMMulticontext()
+						: new Gtk.IMContextSimple();
+					context.UsePreedit = true;
+					context.PreeditStart += (o, args) =>
+					{
+						var handler = Handler;
+						if (handler == null || !HandlesDrawableComposition(handler))
+							return;
+
+						UpdateDrawableInputMethodLocation(handler);
+					};
+					context.PreeditChanged += (o, args) =>
+					{
+						var handler = Handler;
+						if (handler == null || !HandlesDrawableComposition(handler))
+							return;
+
+						context.GetPreeditString(out var text, out _, out _);
+						NotifyDrawableTextComposition(handler, text, !string.IsNullOrEmpty(text));
+					};
+					context.PreeditEnd += (o, args) =>
+					{
+						var handler = Handler;
+						if (handler == null || !HandlesDrawableComposition(handler))
+							return;
+
+						NotifyDrawableTextComposition(handler, string.Empty, false);
+					};
 
 					context.Commit += (o, args) =>
 					{
@@ -721,14 +924,22 @@ namespace Eto.GtkSharp.Forms
 						var tia = new TextInputEventArgs(args.Str);
 						handler.Callback.OnTextInput(handler.Widget, tia);
 						commitHandled = tia.Cancel;
+						UpdateDrawableInputMethodLocation(handler);
 						context.Reset();
 					};
+					var currentHandler = Handler;
+					if (currentHandler != null)
+					{
+						UpdateDrawableInputMethodLocation(currentHandler);
+						if (currentHandler.EventControl?.HasFocus == true)
+							context.FocusIn();
+					}
 					return context;
 				}
 			}
 
 			[GLib.ConnectBefore]
-			public void HandleKeyPressEvent(object o, Gtk.KeyPressEventArgs args)
+			public virtual void HandleKeyPressEvent(object o, Gtk.KeyPressEventArgs args)
 			{
 				var handler = Handler;
 				if (handler == null)
@@ -744,6 +955,7 @@ namespace Eto.GtkSharp.Forms
 				if (e == null || !e.Handled)
 				{
 					commitHandled = false;
+					UpdateDrawableInputMethodLocation(handler);
 					if (Context.FilterKeypress(args.Event))
 					{
 						args.RetVal = commitHandled;
@@ -769,6 +981,15 @@ namespace Eto.GtkSharp.Forms
 				var handler = Handler;
 				if (handler == null)
 					return;
+
+				var shouldFocusInputContext = handler.IsEventHandled(Eto.Forms.Control.TextInputEvent)
+					|| HandlesDrawableComposition(handler);
+				if (shouldFocusInputContext)
+				{
+					var inputContext = Context;
+					UpdateDrawableInputMethodLocation(handler);
+					inputContext.FocusIn();
+				}
 				Application.Instance.AsyncInvoke(() => handler.Callback.OnGotFocus(handler.Widget, EventArgs.Empty));
 			}
 
@@ -777,7 +998,17 @@ namespace Eto.GtkSharp.Forms
 				// Handler can be null here after window is closed
 				var handler = Handler;
 				if (handler != null)
+				{
+					if (context != null)
+					{
+						lastCompositionText = null;
+						lastCompositionActive = null;
+						context.FocusOut();
+						if (HandlesDrawableComposition(handler))
+							NotifyDrawableTextComposition(handler, string.Empty, false);
+					}
 					handler.Callback.OnLostFocus(Handler.Widget, EventArgs.Empty);
+				}
 			}
 
 			public void HandleControlRealized(object sender, EventArgs e)
@@ -787,11 +1018,6 @@ namespace Eto.GtkSharp.Forms
 					return;
 				handler.RealizedSetup();
 				handler.Control.Realized -= HandleControlRealized;
-			}
-
-			public virtual void MappedEvent(object sender, EventArgs e)
-			{
-				Handler?.Callback.OnShown(Handler.Widget, EventArgs.Empty);
 			}
 
 			protected virtual DragEventArgs GetDragEventArgs(Gdk.DragContext context, PointF? location = null, uint time = 0, object controlObject = null, DataObject data = null)
@@ -977,6 +1203,14 @@ namespace Eto.GtkSharp.Forms
 					handler.Callback.OnEnabledChanged(handler.Widget, EventArgs.Empty);
 				}
 			}
+
+			internal void HandleStyleUpdated(object sender, EventArgs e)
+			{
+				var handler = Handler;
+				if (handler == null)
+					return;
+				handler.Callback.OnThemeChanged(handler.Widget, EventArgs.Empty);
+			}
 #endif
 		}
 
@@ -1111,6 +1345,12 @@ namespace Eto.GtkSharp.Forms
 			set { Widget.Properties.Set(GtkControl.TabIndex_Key, value, int.MaxValue); }
 		}
 
+		public virtual bool TabStop
+		{
+			get { return Control.CanFocus; }
+			set { Control.CanFocus = value; }
+		}
+
 		public virtual IEnumerable<Control> VisualControls => Enumerable.Empty<Control>();
 
 
@@ -1161,11 +1401,20 @@ namespace Eto.GtkSharp.Forms
 			if (!ContainerControl.IsRealized)
 			{
 				if (ContainerControl is Gtk.Window window)
+				{
 					window.Child.ShowAll();
+					window.Realize();
+				}
 				else
 					ContainerControl.ShowAll();
 
-				ContainerControl.Realize();
+#if GTK3
+				// GTK returns a stale (minimal) size on the first size request after ShowAll -- some
+				// widgets (e.g. GtkTreeView) only settle their preferred size on a subsequent request.
+				// Prime it here so the measurement below returns the settled value for controls that
+				// haven't been shown yet.
+				control.GetPreferredSize(out _, out _);
+#endif
 			}
 #if GTK3
 			var requestMode = ContainerControl.RequestMode;
@@ -1323,5 +1572,40 @@ namespace Eto.GtkSharp.Forms
 				}
 			}
 		}
+
+#if GTKCORE
+		public virtual void AddGesture(Gesture item)
+		{
+			if (item == null)
+				throw new ArgumentNullException(nameof(item));
+
+			var handler = ((IHandlerSource)item).Handler as Eto.GtkSharp.Forms.Controls.IGtkGestureHandler;
+			if (handler == null)
+				throw new NotSupportedException($"Gesture '{item.GetType().FullName}' is not supported on GTK");
+
+			handler.AttachTo(EventControl);
+		}
+
+		public virtual void ClearGestures()
+		{
+			foreach (var gesture in Widget.Gestures)
+			{
+				if (((IHandlerSource)gesture).Handler is Eto.GtkSharp.Forms.Controls.IGtkGestureHandler handler)
+					handler.Detach();
+			}
+		}
+
+		public virtual void RemoveGesture(Gesture item)
+		{
+			if (item == null)
+				return;
+			if (((IHandlerSource)item).Handler is Eto.GtkSharp.Forms.Controls.IGtkGestureHandler handler)
+				handler.Detach();
+		}
+#else
+		public virtual void AddGesture(Gesture item) { }
+		public virtual void ClearGestures() { }
+		public virtual void RemoveGesture(Gesture item) { }
+#endif
 	}
 }

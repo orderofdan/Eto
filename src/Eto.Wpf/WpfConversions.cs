@@ -1,6 +1,7 @@
 using sp = System.Printing;
 using swd = System.Windows.Documents;
 using Eto.Wpf.Drawing;
+using Eto.Wpf.Forms.Controls;
 using System.Windows.Interop;
 namespace Eto.Wpf
 {
@@ -774,23 +775,23 @@ namespace Eto.Wpf
 			}
 		}
 
-		public static StepperValidDirections ToEto(this xwt.ValidSpinDirections direction)
+		public static StepperValidDirections ToEto(this ValidSpinDirections direction)
 		{
 			var dir = StepperValidDirections.None;
-			if (direction.HasFlag(xwt.ValidSpinDirections.Increase))
+			if (direction.HasFlag(ValidSpinDirections.Increase))
 				dir |= StepperValidDirections.Up;
-			if (direction.HasFlag(xwt.ValidSpinDirections.Decrease))
+			if (direction.HasFlag(ValidSpinDirections.Decrease))
 				dir |= StepperValidDirections.Down;
 			return dir;
 		}
 
-		public static xwt.ValidSpinDirections ToWpf(this StepperValidDirections direction)
+		public static ValidSpinDirections ToWpf(this StepperValidDirections direction)
 		{
-			var dir = xwt.ValidSpinDirections.None;
+			var dir = ValidSpinDirections.None;
 			if (direction.HasFlag(StepperValidDirections.Up))
-				dir |= xwt.ValidSpinDirections.Increase;
+				dir |= ValidSpinDirections.Increase;
 			if (direction.HasFlag(StepperValidDirections.Down))
-				dir |= xwt.ValidSpinDirections.Decrease;
+				dir |= ValidSpinDirections.Decrease;
 			return dir;
 		}
 
@@ -799,7 +800,10 @@ namespace Eto.Wpf
 			switch (value)
 			{
 				case BorderType.Bezel:
-					control.BorderBrush = getBezelBrush?.Invoke() ?? sw.SystemColors.ControlDarkBrush;
+					if (getBezelBrush != null)
+						control.BorderBrush = getBezelBrush();
+					else
+						control.SetResourceReference(swc.Border.BorderBrushProperty, "EtoBorderBezelBrush");
 					control.BorderThickness = new sw.Thickness(1);
 					break;
 				case BorderType.Line:
@@ -821,7 +825,10 @@ namespace Eto.Wpf
 			switch (value)
 			{
 				case BorderType.Bezel:
-					control.BorderBrush = getBezelBrush?.Invoke() ?? sw.SystemColors.ControlDarkBrush;
+					if (getBezelBrush != null)
+						control.BorderBrush = getBezelBrush();
+					else
+						control.SetResourceReference(swc.Control.BorderBrushProperty, "EtoBorderBezelBrush");
 					control.BorderThickness = new sw.Thickness(1);
 					break;
 				case BorderType.Line:
@@ -927,7 +934,7 @@ namespace Eto.Wpf
 			return format;
 		}
 
-		public static Color? GetResourceColor(this sw.FrameworkElement cell, sw.ResourceKey key)
+		public static Color? GetResourceColor(this sw.FrameworkElement cell, object key)
 		{
 			var res = cell.TryFindResource(key);
 			if (res is swm.SolidColorBrush brush)
@@ -937,11 +944,11 @@ namespace Eto.Wpf
 			return null;
 		}
 
-		public static Color? GetResourceColor(this sw.FrameworkElement cell, params sw.ResourceKey[] keys)
+		public static Color? GetResourceColor(this sw.FrameworkElement cell, params object[] keys)
 		{
 			for (int i = 0; i < keys.Length; i++)
 			{
-				sw.ResourceKey key = keys[i];
+				object key = keys[i];
 				var value = GetResourceColor(cell, key);
 				if (value != null)
 					return value;
@@ -1002,5 +1009,37 @@ namespace Eto.Wpf
 					throw new NotSupportedException();
 			}
 		}
+
+		public static sw.TextTrimming ToWpf(this TextTrimming value)
+		{
+			switch (value)
+			{
+				case TextTrimming.None:
+					return sw.TextTrimming.None;
+				case TextTrimming.CharacterEllipsis:
+					return sw.TextTrimming.CharacterEllipsis;
+				case TextTrimming.WordEllipsis:
+					return sw.TextTrimming.WordEllipsis;
+				default:
+					throw new NotSupportedException();
+			}
+		}
+
+		public static TextTrimming ToEto(this sw.TextTrimming trimming)
+		{
+			switch (trimming)
+			{
+				case sw.TextTrimming.None:
+					return TextTrimming.None;
+				case sw.TextTrimming.CharacterEllipsis:
+					return TextTrimming.CharacterEllipsis;
+				case sw.TextTrimming.WordEllipsis:
+					return TextTrimming.WordEllipsis;
+				default:
+					throw new NotSupportedException();
+			}
+		}
 	}
 }
+
+

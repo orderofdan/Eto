@@ -14,6 +14,8 @@ namespace Eto.WinForms.Forms
 	{
 		internal static readonly object MovableByWindowBackground_Key = new object();
 		internal static readonly object IsClosing_Key = new object();
+		internal static readonly object MonitorKeys_Key = new object();
+		internal static readonly object KeyMonitor_Key = new object();
 		internal static readonly object Closeable_Key = new object();
 
 		public Window FromPoint(PointF point)
@@ -35,7 +37,7 @@ namespace Eto.WinForms.Forms
 		}
 	}
 
-	public abstract class WindowHandler<TControl, TWidget, TCallback> : WindowsPanel<TControl, TWidget, TCallback>, Window.IHandler, IWindowHandler
+	public abstract class WindowHandler<TControl, TWidget, TCallback> : WindowsPanel<TControl, TWidget, TCallback>, Window.IHandler, IWindowHandler, Win32.KeyMonitor.ITarget
 		where TControl : swf.Form
 		where TWidget : Window
 		where TCallback : Window.ICallback
@@ -83,12 +85,12 @@ namespace Eto.WinForms.Forms
 			{
 				if (Widget.Loaded)
 				{
-					var size = Control.Size - content.Size;
-					Control.Size = new sd.Size(value.Width + size.Width, value.Height + size.Height);
+					var size = DeviceUnitsToLogical(Control.Size - content.Size);
+					Control.Size = LogicalToDeviceUnits(new Size(value.Width + size.Width, value.Height + size.Height));
 				}
 				else
 				{
-					content.MinimumSize = content.MaximumSize = value.ToSD();
+					content.MinimumSize = content.MaximumSize = LogicalToDeviceUnits(value);
 				}
 				clientWidthSet = value.Width != -1;
 				clientHeightSet = value.Height != -1;
@@ -122,7 +124,7 @@ namespace Eto.WinForms.Forms
 
 		protected override bool SetMinimumSize(Size size)
 		{
-			var sdsize = Size.Max(size, MinimumSize).ToSD();
+			var sdsize = LogicalToDeviceUnits(Size.Max(size, MinimumSize));
 			if (Control.MinimumSize != sdsize)
 			{
 				Control.MinimumSize = sdsize;
@@ -180,13 +182,13 @@ namespace Eto.WinForms.Forms
 			// ensure we auto size to the content
 			if ((!clientWidthSet || !clientHeightSet) /*&& Control.AutoSize*/ && contentSize != null)
 			{
-				var sz = contentSize.Value.ToSD(); // Content.GetPreferredSize().ToSD();
-				var min = new sd.Size();
+				var sz = contentSize.Value; // Content.GetPreferredSize().ToSD();
+				var min = new Size();
 				if (!clientWidthSet)
 					min.Width = sz.Width;
 				if (!clientHeightSet)
 					min.Height = sz.Height;
-				ContainerContentControl.MinimumSize = min;
+				ContainerContentControl.MinimumSize = LogicalToDeviceUnits(min);
 			}
 			// turn off auto sizing so user can then resize the forms
 			var size = Control.Size;
@@ -277,10 +279,106 @@ namespace Eto.WinForms.Forms
 				case Window.LocationChangedEvent:
 					Control.LocationChanged += (sender, e) => Callback.OnLocationChanged(Widget, EventArgs.Empty);
 					break;
+				case Window.PreviewKeyDownEvent:
+				case Window.PreviewKeyUpEvent:
+					AttachKeyMonitor();
+					break;
 				default:
 					base.AttachEvent(id);
 					break;
 			}
+		}
+
+		bool MonitorKeys
+		{
+			get => Widget.Properties.Get<bool>(WindowHandler.MonitorKeys_Key);
+			set => Widget.Properties.Set(WindowHandler.MonitorKeys_Key, value);
+		}
+
+		IDisposable KeyMonitor
+		{
+			get => Widget.Properties.Get<IDisposable>(WindowHandler.KeyMonitor_Key);
+			set => Widget.Properties.Set(WindowHandler.KeyMonitor_Key, value);
+		}
+
+		/// <summary>
+		/// Both preview key events share a single registration, since the underlying hook reports key
+		/// down and key up together. Raising a callback nobody subscribed to is harmless.
+		/// </summary>
+		/// <remarks>
+		/// The registration goes in a process wide list, so it is deferred until the window is loaded
+		/// and dropped again when it unloads. A window that is never shown never registers, and one
+		/// that is closed lets go without waiting for a Dispose that may never come.
+		/// </remarks>
+		void AttachKeyMonitor()
+		{
+			MonitorKeys = true;
+			if (Widget.Loaded)
+				RegisterKeyMonitor();
+		}
+
+		void RegisterKeyMonitor()
+		{
+			if (KeyMonitor == null)
+				KeyMonitor = Win32.KeyMonitor.Register(this);
+		}
+
+		IntPtr Win32.KeyMonitor.ITarget.KeyMonitorHandle => Control.IsHandleCreated ? Control.Handle : IntPtr.Zero;
+
+		void Win32.KeyMonitor.ITarget.OnKeyMonitorKey(int virtualKey, bool isKeyDown)
+		{
+			var key = ((swf.Keys)virtualKey).ToEto();
+			if (isKeyDown)
+				Callback.OnPreviewKeyDown(Widget, new KeyMonitorEventArgs(key, KeyEventType.KeyDown));
+			else
+				Callback.OnPreviewKeyUp(Widget, new KeyMonitorEventArgs(key, KeyEventType.KeyUp));
+		}
+
+		void DetachKeyMonitor()
+		{
+			var monitor = KeyMonitor;
+			if (monitor == null)
+				return;
+			monitor.Dispose();
+			KeyMonitor = null;
+		}
+
+		public override bool DetachEvent(string id)
+		{
+			switch (id)
+			{
+				case Window.PreviewKeyDownEvent:
+				case Window.PreviewKeyUpEvent:
+					// one registration serves both, so only give it up when neither is still wanted
+					var other = id == Window.PreviewKeyDownEvent ? Window.PreviewKeyUpEvent : Window.PreviewKeyDownEvent;
+					if (!IsEventHandled(other))
+					{
+						MonitorKeys = false;
+						DetachKeyMonitor();
+					}
+					return true;
+				default:
+					return base.DetachEvent(id);
+			}
+		}
+
+		public override void OnLoad(EventArgs e)
+		{
+			base.OnLoad(e);
+			if (MonitorKeys)
+				RegisterKeyMonitor();
+		}
+
+		public override void OnUnLoad(EventArgs e)
+		{
+			base.OnUnLoad(e);
+			DetachKeyMonitor();
+		}
+
+		protected override void Dispose(bool disposing)
+		{
+			DetachKeyMonitor();
+			base.Dispose(disposing);
 		}
 
 		bool IsClosing
@@ -475,11 +573,25 @@ namespace Eto.WinForms.Forms
 
 		public new Point Location
 		{
-			get => Control.Location.ToEto();
+			get => Control.DeviceUnitsToLogical(Control.Location);
 			set
 			{
-				Control.Location = value.ToSD();
+				Control.Location = Control.LogicalToDeviceUnits(value);
 				Control.StartPosition = swf.FormStartPosition.Manual;
+			}
+		}
+
+		public Rectangle Bounds
+		{
+			get => new Rectangle(Location, Size);
+			set
+			{
+				// Form.Bounds sets the location and size in a single operation.
+				UserPreferredSize = value.Size;
+				Control.Bounds = new sd.Rectangle(LogicalToDeviceUnits(value.Location), LogicalToDeviceUnits(value.Size));
+				Control.StartPosition = swf.FormStartPosition.Manual;
+				clientWidthSet = value.Width != -1;
+				clientHeightSet = value.Height != -1;
 			}
 		}
 
@@ -598,7 +710,17 @@ namespace Eto.WinForms.Forms
 			}
 		}
 
-		public float LogicalPixelSize => 1f;
+		public float LogicalPixelSize
+		{
+			get
+			{
+#if NET9_0_OR_GREATER
+				return Control.DeviceDpi / 96f;
+#else
+				return 1f;
+#endif
+			}
+		}
 
 		public bool AutoSize
 		{
