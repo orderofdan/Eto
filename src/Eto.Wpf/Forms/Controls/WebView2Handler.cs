@@ -473,10 +473,23 @@ public class WebView2Handler : BaseHandler, WebView.IHandler
 		InitializeAsync();
 	}
 
+	// E_ABORT - reported when initialization is aborted because the control was
+	// torn down before EnsureCoreWebView2Async completed.
+	const int E_ABORT = unchecked((int)0x80004004);
+
 	void Control_CoreWebView2Ready(object sender, CoreWebView2InitializationCompletedEventArgs e)
 	{
 		if (!e.IsSuccess)
 		{
+			// When the control is disposed/unloaded before WebView2 finishes initializing
+			// (e.g. closing a panel or switching the window/viewport layout) the
+			// initialization is aborted with E_ABORT. This is benign and must not be
+			// allowed to escape this native callback, since it would surface as an
+			// unhandled exception on the dispatcher and crash the application.
+			// https://github.com/MicrosoftEdge/WebView2Feedback/issues/2410
+			if (Widget.IsDisposed || e.InitializationException?.HResult == E_ABORT)
+				return;
+
 			throw new WebView2InitializationException("Failed to initialize WebView2", e.InitializationException);
 		}
 
@@ -489,9 +502,25 @@ public class WebView2Handler : BaseHandler, WebView.IHandler
 		if (Widget.IsDisposed)
 			return;
 
-		Control.CoreWebView2.DocumentTitleChanged += CoreWebView2_DocumentTitleChanged;
-		Control.CoreWebView2.NewWindowRequested += CoreWebView2_NewWindowRequested;
-		Control.CoreWebView2.DOMContentLoaded += CoreWebView2_DOMContentLoadedInjectScripts;
+		// This runs a dispatcher turn after initialization completed, and the browser
+		// process can die in between - CoreWebView2 then throws InvalidOperationException
+		// from VerifyBrowserNotCrashed. There is nothing left to hook up when that has
+		// happened, and letting it escape this dispatcher callback crashes the application.
+		CoreWebView2 coreWebView2;
+		try
+		{
+			coreWebView2 = Control.CoreWebView2;
+		}
+		catch (InvalidOperationException)
+		{
+			return;
+		}
+		if (coreWebView2 == null)
+			return;
+
+		coreWebView2.DocumentTitleChanged += CoreWebView2_DocumentTitleChanged;
+		coreWebView2.NewWindowRequested += CoreWebView2_NewWindowRequested;
+		coreWebView2.DOMContentLoaded += CoreWebView2_DOMContentLoadedInjectScripts;
 		webView2Ready = true;
 
 		if (delayedActions != null)

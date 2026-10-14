@@ -203,6 +203,8 @@ namespace Eto.Mac.Forms
 	{
 		internal static readonly object InitialLocation_Key = new object();
 		internal static readonly object PreferredClientSize_Key = new object();
+		internal static readonly object MonitorKeys_Key = new object();
+		internal static readonly object KeyMonitor_Key = new object();
 		internal static readonly Selector selSetStyleMask = new Selector("setStyleMask:");
 		internal static IntPtr selMainMenu = Selector.GetHandle("mainMenu");
 		internal static IntPtr selSetMainMenu = Selector.GetHandle("setMainMenu:");
@@ -425,6 +427,10 @@ namespace Eto.Mac.Forms
 					break;
 				case Eto.Forms.Control.LostFocusEvent:
 					Control.DidResignKey += HandleLostFocus;
+					break;
+				case Window.PreviewKeyDownEvent:
+				case Window.PreviewKeyUpEvent:
+					AttachKeyMonitor();
 					break;
 				case Eto.Forms.Control.SizeChangedEvent:
 					{
@@ -664,11 +670,9 @@ namespace Eto.Mac.Forms
 			}
 		}
 
-		public bool ShowInTaskbar
-		{
-			get;
-			set;
-		}
+		// Defaults to true to match the documented behavior (and the Windows platform handler):
+		// windows show in the taskbar/Dock unless explicitly told not to.
+		public bool ShowInTaskbar { get; set; } = true;
 
 		public bool Closeable
 		{
@@ -1030,6 +1034,30 @@ namespace Eto.Mac.Forms
 			}
 		}
 
+		public Rectangle Bounds
+		{
+			get => new Rectangle(Location, Size);
+			set
+			{
+				if (!Widget.Loaded)
+				{
+					// Window is not shown yet; store the desired size/location to apply on load.
+					Size = value.Size;
+					Location = value.Location;
+					return;
+				}
+				// Apply the size and location in a single SetFrame call rather than resizing and
+				// then moving the window, which would move it twice.
+				UserPreferredSize = value.Size;
+				if (Control is EtoWindow etoWindow)
+					etoWindow.DisableCenterParent = true;
+				// location is relative to the top left of the main screen; translate to a bottom-left origin frame
+				var mainFrame = NSScreen.Screens[0].Frame;
+				var frame = new CGRect((nfloat)value.X, mainFrame.Height - value.Y - value.Height, (nfloat)value.Width, (nfloat)value.Height);
+				Control.SetFrame(frame, true, AnimateSizeChanges);
+			}
+		}
+
 		private Point GetLocation()
 		{
 			// translate location relative to the top left corner of main screen
@@ -1136,6 +1164,8 @@ namespace Eto.Mac.Forms
 				PositionWindow();
 			}
 			base.OnLoad(e);
+			if (MonitorKeys)
+				RegisterKeyMonitor();
 		}
 
 		Size GetBorderSize()
@@ -1396,8 +1426,93 @@ namespace Eto.Mac.Forms
 			}
 		}
 
+		bool MonitorKeys
+		{
+			get => Widget.Properties.Get<bool>(MacWindow.MonitorKeys_Key);
+			set => Widget.Properties.Set(MacWindow.MonitorKeys_Key, value);
+		}
+
+		NSObject KeyMonitor
+		{
+			get => Widget.Properties.Get<NSObject>(MacWindow.KeyMonitor_Key);
+			set => Widget.Properties.Set(MacWindow.KeyMonitor_Key, value);
+		}
+
+		/// <summary>
+		/// Key events go to the first responder and never bubble anywhere Eto can see them, so a local
+		/// event monitor is the only way to notice keys going to content hosted in the window. Both
+		/// preview key events share one monitor; raising a callback nobody subscribed to is harmless.
+		/// </summary>
+		/// <remarks>
+		/// AppKit holds the monitor block, and with it this handler, so it is deferred until the window
+		/// is loaded and removed again when it unloads. A window that is never shown never installs a
+		/// monitor, and one that is closed lets go without waiting for a Dispose that may never come.
+		/// </remarks>
+		void AttachKeyMonitor()
+		{
+			MonitorKeys = true;
+			if (Widget.Loaded)
+				RegisterKeyMonitor();
+		}
+
+		void RegisterKeyMonitor()
+		{
+			if (KeyMonitor != null)
+				return;
+			KeyMonitor = NSEvent.AddLocalMonitorForEventsMatchingMask(NSEventMask.KeyDown | NSEventMask.KeyUp, theEvent =>
+			{
+				// only keys headed for this window, and always hand the event back untouched so the
+				// responder chain still gets it
+				if (theEvent != null && theEvent.Window == Control)
+				{
+					var key = KeyMap.MapKey(theEvent.KeyCode, theEvent.ModifierFlags);
+					if (theEvent.Type == NSEventType.KeyDown)
+						Callback.OnPreviewKeyDown(Widget, new KeyMonitorEventArgs(key, KeyEventType.KeyDown));
+					else
+						Callback.OnPreviewKeyUp(Widget, new KeyMonitorEventArgs(key, KeyEventType.KeyUp));
+				}
+				return theEvent;
+			});
+		}
+
+		void DetachKeyMonitor()
+		{
+			var monitor = KeyMonitor;
+			if (monitor == null)
+				return;
+			NSEvent.RemoveMonitor(monitor);
+			KeyMonitor = null;
+		}
+
+		public override bool DetachEvent(string id)
+		{
+			switch (id)
+			{
+				case Window.PreviewKeyDownEvent:
+				case Window.PreviewKeyUpEvent:
+					// one monitor serves both, so only give it up when neither is still wanted
+					var other = id == Window.PreviewKeyDownEvent ? Window.PreviewKeyUpEvent : Window.PreviewKeyDownEvent;
+					if (!IsEventHandled(other))
+					{
+						MonitorKeys = false;
+						DetachKeyMonitor();
+					}
+					return true;
+				default:
+					return base.DetachEvent(id);
+			}
+		}
+
+		public override void OnUnLoad(EventArgs e)
+		{
+			base.OnUnLoad(e);
+			DetachKeyMonitor();
+		}
+
 		protected override void Dispose(bool disposing)
 		{
+			DetachKeyMonitor();
+
 			if (disposing && Widget.Loaded)
 			{
 				// we can't cancel closing in this case, so don't bother firing the closing event

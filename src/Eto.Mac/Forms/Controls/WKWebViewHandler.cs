@@ -22,6 +22,13 @@ namespace Eto.Mac.Forms.Controls
 			return new EtoWebView(this);
 		}
 
+		protected override SizeF GetNaturalSize(SizeF availableSize)
+		{
+			// WKWebView has no intrinsic size as its content is entirely up to the loaded document,
+			// so report a default size like other controls that can't be measured.
+			return new SizeF(100, 100);
+		}
+
 		public class EtoNavigationDelegate : wk.WKNavigationDelegate
 		{
 			public EtoNavigationDelegate()
@@ -38,13 +45,13 @@ namespace Eto.Mac.Forms.Controls
 			public override void DidFinishNavigation(wk.WKWebView webView, wk.WKNavigation navigation)
 			{
 				var h = Handler;
-				if (h != null)
-				{
-					h.SetupContextMenu();
-					var args = new WebViewLoadedEventArgs(h.Url);
-					h.Callback.OnNavigated(h.Widget, args);
-					h.Callback.OnDocumentLoaded(h.Widget, args);
-				}
+				if (h == null || h.Widget.IsDisposed)
+					return;
+					
+				h.SetupContextMenu();
+				var args = new WebViewLoadedEventArgs(h.Url);
+				h.Callback.OnNavigated(h.Widget, args);
+				h.Callback.OnDocumentLoaded(h.Widget, args);
 			}
 
 			public override void DecidePolicy(wk.WKWebView webView, wk.WKNavigationAction navigationAction, Action<wk.WKNavigationActionPolicy> decisionHandler)
@@ -56,7 +63,7 @@ namespace Eto.Mac.Forms.Controls
 			public override void DecidePolicy(wk.WKWebView webView, wk.WKNavigationAction navigationAction, wk.WKWebpagePreferences preferences, Action<wk.WKNavigationActionPolicy, wk.WKWebpagePreferences> decisionHandler)
 			{
 				var h = Handler;
-				if (h == null)
+				if (h == null || h.Widget.IsDisposed)
 					return;
 					
 				var requestUrl = navigationAction.Request.Url;
@@ -116,14 +123,22 @@ namespace Eto.Mac.Forms.Controls
 
 		class ScriptMessageHandler : wk.WKScriptMessageHandler
 		{
-			private readonly WKWebViewHandler Handler;
+			// WKUserContentController retains its script message handlers, and the content controller is kept
+			// alive by the configuration the handler itself owns. Referencing the handler strongly here would
+			// close that loop with a native retain in it, keeping the WebView alive forever.
+			readonly WeakReference handler;
+			WKWebViewHandler Handler => handler.Target as WKWebViewHandler;
+
 			public ScriptMessageHandler(WKWebViewHandler handler) : base()
 			{
-				Handler = handler;
+				this.handler = new WeakReference(handler);
 			}
 			public override void DidReceiveScriptMessage(wk.WKUserContentController userContentController, wk.WKScriptMessage message)
 			{
-				Handler.Callback.OnMessageReceived(Handler.Widget, new WebViewMessageEventArgs(message.Body.ToString()));
+				var h = Handler;
+				if (h == null || h.Widget.IsDisposed)
+					return;
+				h.Callback.OnMessageReceived(h.Widget, new WebViewMessageEventArgs(message.Body.ToString()));
 			}
 		}
 

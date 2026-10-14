@@ -173,11 +173,16 @@ namespace Eto
 			MBUTTONUP = 0x0208,
 			MBUTTONDBLCLK = 0x0209,
 			MOUSEWHEEL = 0x20A,
+			MOUSEHWHEEL = 0x20E,
+
+			GESTURE = 0x0119,
+			GESTURENOTIFY = 0x011A,
 
 			CUT = 0x0300,
 			COPY = 0x0301,
 			PASTE = 0x0302,
 			CLEAR = 0x0303,
+			CLIPBOARDUPDATE = 0x031D,
 
 			ERASEBKGND = 0x14,
 
@@ -341,17 +346,99 @@ namespace Eto
 		[DllImport("user32.dll")]
 		public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
+		[StructLayout(LayoutKind.Sequential)]
+		public struct POINTS
+		{
+			public short x;
+			public short y;
+		}
+
+		[StructLayout(LayoutKind.Sequential)]
+		public struct GESTUREINFO
+		{
+			public int cbSize;
+			public int dwFlags;
+			public int dwID;
+			public IntPtr hwndTarget;
+			public POINTS ptsLocation;
+			public int dwInstanceID;
+			public int dwSequenceID;
+			public long ullArguments;
+			public int cbExtraArgs;
+		}
+
+		[StructLayout(LayoutKind.Sequential)]
+		public struct GESTURECONFIG
+		{
+			public int dwID;
+			public int dwWant;
+			public int dwBlock;
+		}
+
+		public const int GID_BEGIN = 1;
+		public const int GID_END = 2;
+		public const int GID_ZOOM = 3;
+		public const int GID_PAN = 4;
+		public const int GID_ROTATE = 5;
+		public const int GID_TWOFINGERTAP = 6;
+		public const int GID_PRESSANDTAP = 7;
+
+		public const int GF_BEGIN = 0x00000001;
+		public const int GF_INERTIA = 0x00000002;
+		public const int GF_END = 0x00000004;
+
+		public const int GC_ALLGESTURES = 0x00000001;
+		public const int GC_ZOOM = 0x00000001;
+		public const int GC_PAN = 0x00000001;
+		public const int GC_PAN_WITH_SINGLE_FINGER_VERTICALLY = 0x00000002;
+		public const int GC_PAN_WITH_SINGLE_FINGER_HORIZONTALLY = 0x00000004;
+		public const int GC_PAN_WITH_GUTTER = 0x00000008;
+		public const int GC_PAN_WITH_INERTIA = 0x00000010;
+
+		[DllImport("user32.dll", SetLastError = true)]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		public static extern bool GetGestureInfo(IntPtr hGestureInfo, ref GESTUREINFO pGestureInfo);
+
+		[DllImport("user32.dll", SetLastError = true)]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		public static extern bool CloseGestureInfoHandle(IntPtr hGestureInfo);
+
+		[DllImport("user32.dll", SetLastError = true)]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		public static extern bool SetGestureConfig(IntPtr hwnd, int dwReserved, int cIDs, [In] GESTURECONFIG[] pGestureConfig, int cbSize);
+
 		[DllImport("user32.dll", SetLastError = true)]
 		public static extern uint GetWindowLong(IntPtr hWnd, GWL nIndex);
 
 		[DllImport("user32.dll")]
 		public static extern int SetWindowLong(IntPtr hWnd, GWL nIndex, uint dwNewLong);
 
+		[DllImport("user32.dll", EntryPoint = "SetWindowLongPtr", SetLastError = true)]
+		static extern IntPtr SetWindowLongPtrA(IntPtr hWnd, GWL nIndex, IntPtr dwNewLong);
 		[DllImport("user32.dll", SetLastError = true)]
-		public static extern IntPtr SetWindowLongPtr(IntPtr hWnd, GWL nIndex, IntPtr dwNewLong);
+		static extern IntPtr SetWindowLongPtrW(IntPtr hWnd, GWL nIndex, IntPtr dwNewLong);
+		
+		public static IntPtr SetWindowLongPtr(IntPtr hWnd, GWL nIndex, IntPtr dwNewLong)
+		{
+			if (Environment.Is64BitProcess)
+				return SetWindowLongPtrW(hWnd, nIndex, dwNewLong);
+			else
+				return SetWindowLongPtrA(hWnd, nIndex, dwNewLong);
+		}
 
-		[DllImport("user32.dll", SetLastError = true)]
-		public static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+		[DllImport("user32.dll", EntryPoint = "CallWindowProc", SetLastError = true)]
+		static extern IntPtr CallWindowProcA(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+		[DllImport("user32.dll", EntryPoint = "CallWindowProcW", SetLastError = true)]
+		static extern IntPtr CallWindowProcW(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+		
+		public static IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam)
+		{
+			if (Environment.Is64BitProcess)
+				return CallWindowProcW(lpPrevWndFunc, hWnd, Msg, wParam, lParam);
+			else
+				return CallWindowProcA(lpPrevWndFunc, hWnd, Msg, wParam, lParam);
+		}
 
 		[DllImport("user32.dll")]
 		public static extern IntPtr SendMessage(IntPtr hWnd, WM wMsg, IntPtr wParam, IntPtr lParam);
@@ -483,6 +570,10 @@ namespace Eto
 		[return: MarshalAs(UnmanagedType.Bool)]
 		public static extern bool UnhookWindowsHookEx(IntPtr hookId);
 
+		[DllImport("user32.dll")]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		public static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
+
 		[DllImportAttribute("user32.dll")]
 		public static extern bool ReleaseCapture();
 
@@ -605,6 +696,9 @@ namespace Eto
 		[DllImport("kernel32.dll", CharSet = CharSet.Auto)]
 		public static extern int GlobalSize(IntPtr handle);
 
+		[DllImport("ole32.dll")]
+		public static extern void ReleaseStgMedium(ref System.Runtime.InteropServices.ComTypes.STGMEDIUM pmedium);
+
 
 		public enum SBB
 		{
@@ -653,6 +747,14 @@ namespace Eto
 
 		[DllImport("user32.dll")]
 		public static extern bool DestroyWindow(IntPtr hWnd);
+
+		[DllImport("user32.dll", SetLastError = true)]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		public static extern bool AddClipboardFormatListener(IntPtr hwnd);
+
+		[DllImport("user32.dll", SetLastError = true)]
+		[return: MarshalAs(UnmanagedType.Bool)]
+		public static extern bool RemoveClipboardFormatListener(IntPtr hwnd);
 
 		[DllImport("User32.dll", SetLastError = true)]
 		public static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
@@ -815,6 +917,136 @@ namespace Eto
 			public System.Drawing.Point ptMaxPosition;
 			public System.Drawing.Rectangle rcNormalPosition;
 		}
-		
+
+		public const int SHIL_LARGE = 0x0;
+		public const int SHIL_SMALL = 0x1;
+		public const int SHIL_EXTRALARGE = 0x2;
+		public const int SHIL_JUMBO = 0x3;
+
+		public static readonly Guid IID_IImageList = new Guid("46EB5926-582E-4017-9FDF-E8998DAA0950");
+
+		[DllImport("Shell32.dll", EntryPoint = "#727")]
+		public static extern int SHGetImageList(int iImageList, ref Guid riid, out IImageList ppv);
+
+		[ComImport]
+		[Guid("46EB5926-582E-4017-9FDF-E8998DAA0950")]
+		[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+		public interface IImageList
+		{
+			[PreserveSig] int Add(IntPtr hbmImage, IntPtr hbmMask, ref int pi);
+			[PreserveSig] int ReplaceIcon(int i, IntPtr hicon, ref int pi);
+			[PreserveSig] int SetOverlayImage(int iImage, int iOverlay);
+			[PreserveSig] int Replace(int i, IntPtr hbmImage, IntPtr hbmMask);
+			[PreserveSig] int AddMasked(IntPtr hbmImage, int crMask, ref int pi);
+			[PreserveSig] int Draw(ref IMAGELISTDRAWPARAMS pimldp);
+			[PreserveSig] int Remove(int i);
+			[PreserveSig] int GetIcon(int i, int flags, ref IntPtr picon);
+			[PreserveSig] int GetImageInfo(int i, ref IMAGEINFO pImageInfo);
+			[PreserveSig] int Copy(int iDst, IImageList punkSrc, int iSrc, int uFlags);
+			[PreserveSig] int Merge(int i1, IImageList punk2, int i2, int dx, int dy, ref Guid riid, ref IntPtr ppv);
+			[PreserveSig] int Clone(ref Guid riid, ref IntPtr ppv);
+			[PreserveSig] int GetImageRect(int i, ref RECT prc);
+			[PreserveSig] int GetIconSize(ref int cx, ref int cy);
+			[PreserveSig] int SetIconSize(int cx, int cy);
+			[PreserveSig] int GetImageCount(ref int pi);
+			[PreserveSig] int SetImageCount(int uNewCount);
+			[PreserveSig] int SetBkColor(int clrBk, ref int pclr);
+			[PreserveSig] int GetBkColor(ref int pclr);
+			[PreserveSig] int BeginDrag(int iTrack, int dxHotspot, int dyHotspot);
+			[PreserveSig] int EndDrag();
+			[PreserveSig] int DragEnter(IntPtr hwndLock, int x, int y);
+			[PreserveSig] int DragLeave(IntPtr hwndLock);
+			[PreserveSig] int DragMove(int x, int y);
+			[PreserveSig] int SetDragCursorImage(ref IImageList punk, int iDrag, int dxHotspot, int dyHotspot);
+			[PreserveSig] int DragShowNolock(int fShow);
+			[PreserveSig] int GetDragImage(ref POINT ppt, ref POINT pptHotspot, ref Guid riid, ref IntPtr ppv);
+			[PreserveSig] int GetItemFlags(int i, ref int dwFlags);
+			[PreserveSig] int GetOverlayImage(int iOverlay, ref int piIndex);
+		}
+
+		[StructLayout(LayoutKind.Sequential)]
+		public struct IMAGELISTDRAWPARAMS
+		{
+			public int cbSize;
+			public IntPtr himl;
+			public int i;
+			public IntPtr hdcDst;
+			public int x;
+			public int y;
+			public int cx;
+			public int cy;
+			public int xBitmap;
+			public int yBitmap;
+			public int rgbBk;
+			public int rgbFg;
+			public int fStyle;
+			public int dwRop;
+			public int fState;
+			public int Frame;
+			public int crEffect;
+		}
+
+		[StructLayout(LayoutKind.Sequential)]
+		public struct IMAGEINFO
+		{
+			public IntPtr hbmImage;
+			public IntPtr hbmMask;
+			public int Unused1;
+			public int Unused2;
+			public RECT rcImage;
+		}
+
+		public const int ILD_TRANSPARENT = 0x00000001;
+
+		public static System.Drawing.Icon GetIconFromImageList(int imageListType, int iconIndex)
+		{
+			var iid = IID_IImageList;
+			if (SHGetImageList(imageListType, ref iid, out var imageList) != 0)
+				return null;
+
+			try
+			{
+				var hIcon = IntPtr.Zero;
+				if (imageList.GetIcon(iconIndex, ILD_TRANSPARENT, ref hIcon) != 0 || hIcon == IntPtr.Zero)
+					return null;
+
+				var icon = (System.Drawing.Icon)System.Drawing.Icon.FromHandle(hIcon).Clone();
+				DestroyIcon(hIcon);
+				return icon;
+			}
+			finally
+			{
+				Marshal.ReleaseComObject(imageList);
+			}
+		}
+
+		public static int GetBestImageListType(int desiredPixels)
+		{
+			if (desiredPixels > 48)
+				return SHIL_JUMBO;    // 256x256
+			if (desiredPixels > 32)
+				return SHIL_EXTRALARGE; // 48x48
+			if (desiredPixels > 16)
+				return SHIL_LARGE;    // 32x32
+			return SHIL_SMALL;       // 16x16
+		}
+
+		public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
+		// Title bar / frame tinting. Windows 11 (build 22000) and later only; on earlier
+		// versions DwmSetWindowAttribute simply fails with E_INVALIDARG and the frame keeps
+		// its system appearance. Values are COLORREF (0x00BBGGRR), see MakeColorRef.
+		public const int DWMWA_BORDER_COLOR = 34;
+		public const int DWMWA_CAPTION_COLOR = 35;
+		public const int DWMWA_TEXT_COLOR = 36;
+
+		/// <summary>Sentinel that restores the system default for the color attributes above.</summary>
+		public const int DWMWA_COLOR_DEFAULT = unchecked((int)0xFFFFFFFF);
+
+		/// <summary>Packs RGB components into a COLORREF (0x00BBGGRR) for the DWMWA_*_COLOR attributes.</summary>
+		public static int MakeColorRef(byte r, byte g, byte b) => r | (g << 8) | (b << 16);
+
+		[DllImport("dwmapi.dll")]
+		public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 	}
 }

@@ -134,6 +134,10 @@ namespace Eto.Mac
 			p.Add<Color.IHandler>(() => new ColorHandler());
 			p.Add<SystemColors.IHandler>(() => new SystemColorsHandler());
 			p.Add<FormattedText.IHandler>(() => new FormattedTextHandler());
+			p.Add<MagnificationGesture.IHandler>(() => new MagnificationGestureHandler());
+			p.Add<RotationGesture.IHandler>(() => new RotationGestureHandler());
+			p.Add<PanGesture.IHandler>(() => new PanGestureHandler());
+			p.Add<ScrollGesture.IHandler>(() => new ScrollGestureHandler());
 
 			// Forms.Cells
 			p.Add<CheckBoxCell.IHandler>(() => new CheckBoxCellHandler());
@@ -250,6 +254,7 @@ namespace Eto.Mac
 			p.Add<DataFormats.IHandler>(() => new DataFormatsHandler());
 			p.Add<Taskbar.IHandler>(() => new TaskbarHandler());
 			p.Add<Window.IWindowHandler>(() => new WindowHandler());
+			p.Add<Themes.IHandler>(() => new ThemesHandler());
 
 			// IO
 			p.Add<SystemIcons.IHandler>(() => new SystemIconsHandler());
@@ -263,11 +268,18 @@ namespace Eto.Mac
 		{
 			return new NSAutoreleasePool();
 		}
+		
+		public bool RequireAppBundle { get; set; }
 
 		public override bool IsValid
 		{
 			get
 			{
+				if (NSApplication.SharedApplication == null)
+					return false;
+				if (!RequireAppBundle)
+					return true;
+					
 				var bundle = NSBundle.MainBundle;
 				if (bundle == null)
 					return false;
