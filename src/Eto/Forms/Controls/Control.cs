@@ -23,6 +23,58 @@ public partial class Control : BindableWidget, IMouseInputSource, IKeyboardInput
 		}
 	}
 
+	static readonly object GesturesKey = new object();
+
+	/// <summary>
+	/// Gets the gestures attached to this control.
+	/// </summary>
+	public Collection<Gesture> Gestures => Properties.Create(GesturesKey, () => new GestureCollection(this));
+
+	class GestureCollection : Collection<Gesture>
+	{
+		public GestureCollection(Control control)
+		{
+			this.control = control;
+		}
+
+		private readonly Control control;
+
+		protected override void InsertItem(int index, Gesture item)
+		{
+			control.Handler.AddGesture(item);
+			item.Control = control;
+			base.InsertItem(index, item);
+		}
+
+		protected override void ClearItems()
+		{
+			foreach (var item in this)
+			{
+				item.Control = null;
+			}
+			control.Handler.ClearGestures();
+			base.ClearItems();
+		}
+
+		protected override void RemoveItem(int index)
+		{
+			var item = this[index];
+			control.Handler.RemoveGesture(item);
+			item.Control = null;
+			base.RemoveItem(index);
+		}
+
+		protected override void SetItem(int index, Gesture item)
+		{
+			var oldItem = this[index];
+			control.Handler.AddGesture(item);
+			control.Handler.RemoveGesture(oldItem);
+			oldItem.Control = null;
+			item.Control = control;
+			base.SetItem(index, item);
+		}
+	}
+
 	/// <summary>
 	/// Gets a value indicating that the control is loaded onto a form, that is it has been created, added to a parent, and shown
 	/// </summary>
@@ -466,6 +518,31 @@ public partial class Control : BindableWidget, IMouseInputSource, IKeyboardInput
 		Properties.TriggerEvent(ShownEvent, this, e);
 	}
 
+	/// <summary>
+	/// Event identifier for handlers when attaching the <see cref="Control.ThemeChanged"/> event
+	/// </summary>
+	public const string ThemeChangedEvent = "Control.ThemeChanged";
+
+	/// <summary>
+	/// Occurs when the control's theme changes either due to a system theme change 
+	/// or when Application.Instance.CurrentTheme is set.
+	/// </summary>
+	public event EventHandler<EventArgs> ThemeChanged
+	{
+		add { Properties.AddHandlerEvent(ThemeChangedEvent, value); }
+		remove { Properties.RemoveEvent(ThemeChangedEvent, value); }
+	}
+
+	/// <summary>
+	/// Raises the <see cref="ThemeChanged"/> event.
+	/// </summary>
+	/// <param name="e">Event arguments</param>
+	protected virtual void OnThemeChanged(EventArgs e)
+	{
+		Properties.TriggerEvent(ThemeChangedEvent, this, e);
+	}
+
+
 	static readonly object PreLoadKey = new object();
 
 	/// <summary>
@@ -742,6 +819,7 @@ public partial class Control : BindableWidget, IMouseInputSource, IKeyboardInput
 		EventLookup.Register<Control>(c => c.OnDragLeave(null), Control.DragLeaveEvent);
 		EventLookup.Register<Control>(c => c.OnDragEnd(null), Control.DragEndEvent);
 		EventLookup.Register<Control>(c => c.OnEnabledChanged(null), Control.EnabledChangedEvent);
+		EventLookup.Register<Control>(c => c.OnThemeChanged(null), Control.ThemeChangedEvent);
 	}
 
 	/// <summary>
@@ -1259,17 +1337,17 @@ public partial class Control : BindableWidget, IMouseInputSource, IKeyboardInput
 	public PointF PointToScreen(PointF point) => Handler.PointToScreen(point);
 
 	/// <summary>
-	/// Converts a rectangle from screen space to control space.
-	/// </summary>
-	/// <returns>The rectangle in control space</returns>
-	/// <param name="rect">Rectangle in screen space</param>
-	public RectangleF RectangleToScreen(RectangleF rect) => new RectangleF(PointToScreen(rect.Location), PointToScreen(rect.EndLocation));
-
-	/// <summary>
 	/// Converts a rectangle from control space to screen space
 	/// </summary>
 	/// <returns>The rectangle in screen space</returns>
 	/// <param name="rect">Rectangle in control space</param>
+	public RectangleF RectangleToScreen(RectangleF rect) => new RectangleF(PointToScreen(rect.Location), PointToScreen(rect.EndLocation));
+
+	/// <summary>
+	/// Converts a rectangle from screen space to control space.
+	/// </summary>
+	/// <returns>The rectangle in control space</returns>
+	/// <param name="rect">Rectangle in screen space</param>
 	public RectangleF RectangleFromScreen(RectangleF rect) => new RectangleF(PointFromScreen(rect.Location), PointFromScreen(rect.EndLocation));
 
 	/// <summary>
@@ -1324,6 +1402,29 @@ public partial class Control : BindableWidget, IMouseInputSource, IKeyboardInput
 	{
 		get { return Handler.TabIndex; }
 		set { Handler.TabIndex = value; }
+	}
+
+	/// <summary>
+	/// Gets or sets a value indicating whether the user can get to this control using the tab key.
+	/// </summary>
+	/// <remarks>
+	/// When <c>false</c>, the control is skipped when cycling through controls with the tab key, but can still be
+	/// focused by clicking on it or by calling <see cref="Focus"/>.
+	/// This is useful for composite controls where only part of the control should be in the tab order, such as
+	/// the spinner of a <see cref="TextStepper"/> or <see cref="NumericStepper"/>.
+	/// 
+	/// The tab key only cycles through the controls within a window, so this has no effect for a <see cref="Window"/>.
+	/// 
+	/// Note that on Gtk this maps directly to whether the underlying widget can be focused, so it also prevents the
+	/// control from being focused by clicking on it, and controls that never accept focus (such as a <see cref="Label"/>)
+	/// will report <c>false</c>. On iOS and Android this has no effect.
+	/// </remarks>
+	/// <value><c>true</c> to include the control in the tab order (the default); <c>false</c> to skip it.</value>
+	[sc.DefaultValue(true)]
+	public virtual bool TabStop
+	{
+		get { return Handler.TabStop; }
+		set { Handler.TabStop = value; }
 	}
 
 	/// <summary>
@@ -1574,6 +1675,11 @@ public partial class Control : BindableWidget, IMouseInputSource, IKeyboardInput
 		/// Raises the EnabledChanged event.
 		/// </summary>
 		void OnEnabledChanged(Control widget, EventArgs e);
+		
+		/// <summary>
+		/// Raises the ThemeChanged event.
+		/// </summary>
+		void OnThemeChanged(Control widget, EventArgs e);
 	}
 
 	/// <summary>
@@ -1746,6 +1852,15 @@ public partial class Control : BindableWidget, IMouseInputSource, IKeyboardInput
 		{
 			using (widget.Platform.Context)
 				widget.OnEnabledChanged(e);
+		}
+		
+		/// <summary>
+		/// Raises the ThemeChanged event.
+		/// </summary>
+		public void OnThemeChanged(Control widget, EventArgs e)
+		{
+			using (widget.Platform.Context)
+				widget.OnThemeChanged(e);
 		}
 	}
 
@@ -1995,6 +2110,19 @@ public partial class Control : BindableWidget, IMouseInputSource, IKeyboardInput
 		int TabIndex { get; set; }
 
 		/// <summary>
+		/// Gets or sets a value indicating whether the user can get to this control using the tab key.
+		/// </summary>
+		/// <remarks>
+		/// When <c>false</c>, the control is skipped when cycling through controls with the tab key, but can still be
+		/// focused by clicking on it or by calling <see cref="Control.Focus"/>.
+		/// 
+		/// Note that on Gtk this also prevents the control from being focused by clicking on it, and on iOS and Android
+		/// this has no effect.
+		/// </remarks>
+		/// <value><c>true</c> to include the control in the tab order (the default); <c>false</c> to skip it.</value>
+		bool TabStop { get; set; }
+
+		/// <summary>
 		/// Gets an enumeration of controls that are in the visual tree.
 		/// </summary>
 		/// <remarks>
@@ -2066,6 +2194,20 @@ public partial class Control : BindableWidget, IMouseInputSource, IKeyboardInput
 		/// Releases the mouse capture after a call to <see cref="CaptureMouse"/>.
 		/// </summary>
 		void ReleaseMouseCapture();
+		/// <summary>
+		/// Adds a gesture to the control.
+		/// </summary>
+		/// <param name="item">Gesture to add.</param>
+		void AddGesture(Gesture item);
+		/// <summary>
+		/// Removes all gestures from the control.
+		/// </summary>
+		void ClearGestures();
+		/// <summary>
+		/// Removes a gesture from the control.
+		/// </summary>
+		/// <param name="item">Gesture to remove.</param>
+		void RemoveGesture(Gesture item);
 	}
 	#endregion
 }

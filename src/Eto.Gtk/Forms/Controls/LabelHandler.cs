@@ -5,6 +5,7 @@ namespace Eto.GtkSharp.Forms.Controls
 	public class LabelHandler : GtkControl<LabelHandler.EtoLabel, Label, Label.ICallback>, Label.IHandler
 	{
 		string _text;
+		bool _alwaysShowMnemonic;
 		readonly Gtk.EventBox eventBox;
 		TextAlignment horizontalAlign = TextAlignment.Left;
 		VerticalAlignment verticalAlign = VerticalAlignment.Top;
@@ -127,26 +128,33 @@ namespace Eto.GtkSharp.Forms.Controls
 			Wrap = WrapMode.Word;
 		}
 
+		WrapMode wrap = WrapMode.Word;
+		TextTrimming trimming;
+
 		public WrapMode Wrap
 		{
-			get
-			{
-				if (!Control.LineWrap)
-					return WrapMode.None;
-				if (Control.LineWrapMode == Pango.WrapMode.Char)
-					return WrapMode.Character;
-				return WrapMode.Word;
-			}
+			get => wrap;
 			set
 			{
-				SetWrap(value);
+				wrap = value;
+				SetWrap();
 			}
 		}
 
-		void SetWrap(WrapMode mode)
+		public TextTrimming Trimming
+		{
+			get => trimming;
+			set
+			{
+				trimming = value;
+				SetWrap();
+			}
+		}
+
+		void SetWrap()
 		{
 			Control.ResetWidth();
-			switch (mode)
+			switch (wrap)
 			{
 				case WrapMode.None:
 					Control.Wrap = false;
@@ -167,6 +175,9 @@ namespace Eto.GtkSharp.Forms.Controls
 				default:
 					throw new NotSupportedException();
 			}
+			// Pango cannot wrap and ellipsize the same layout - setting both makes it ellipsize to a single
+			// line instead of wrapping.  Wrapping wins here, see Eto.Forms.TextTrimming.
+			Control.Ellipsize = wrap == WrapMode.None ? trimming.ToPango() : Pango.EllipsizeMode.None;
 			Control.QueueResize();
 		}
 
@@ -196,9 +207,17 @@ namespace Eto.GtkSharp.Forms.Controls
 				Control.ResetWidth();
 				_text = value;
 				if (Control.UseUnderline)
+				{
 					Control.TextWithMnemonic = _text.ToPlatformMnemonic();
+					// Keep Gtk's mnemonic behavior via TextWithMnemonic, and
+					// use the label pattern only to make the underline visible.
+					Control.Pattern = _alwaysShowMnemonic ? GtkMnemonicHelper.ToPatternWithMnemonicUnderline(_text) : null;
+				}
 				else
+				{
+					Control.Pattern = null;
 					Control.Text = _text;
+				}
 				InvalidateMeasure();
 			}
 		}
@@ -260,8 +279,15 @@ namespace Eto.GtkSharp.Forms.Controls
 
 		public bool AlwaysShowMnemonic
 		{
-			get => false;
-			set { /* not supported in GTK */ }
+			get => _alwaysShowMnemonic;
+			set
+			{
+				if (_alwaysShowMnemonic == value)
+					return;
+				_alwaysShowMnemonic = value;
+				if (_text != null)
+					Text = _text;
+			}
 		}
 	}
 }

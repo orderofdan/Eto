@@ -109,6 +109,86 @@ namespace Eto.WinForms.Forms
 		where TWidget : Control
 		where TCallback : Control.ICallback
 	{
+		
+		protected Size DeviceUnitsToLogical(sd.Size size)
+		{
+#if NET9_0_OR_GREATER
+			return Control.DeviceUnitsToLogical(size);
+#else
+			return size.ToEto();
+#endif
+		}
+
+		protected Rectangle DeviceUnitsToLogical(sd.Rectangle rect)
+		{
+#if NET9_0_OR_GREATER
+			var location = Control.DeviceUnitsToLogical(rect.Location);
+			var size = Control.DeviceUnitsToLogical(rect.Size);
+			return new Rectangle(location, size);
+#else
+			return rect.ToEto();
+#endif
+		}
+
+		protected Point DeviceUnitsToLogical(sd.Point point)
+		{
+#if NET9_0_OR_GREATER
+			return (Point)Control.DeviceUnitsToLogical((sd.Size)point);
+#else
+			return point.ToEto();
+#endif
+		}
+		protected int DeviceUnitsToLogical(int size)
+		{
+#if NET9_0_OR_GREATER
+			return Control.DeviceUnitsToLogical(size);
+#else
+			return size;
+#endif
+		}
+		protected sd.Size LogicalToDeviceUnits(Size size)
+		{
+#if NET9_0_OR_GREATER
+			return Control.LogicalToDeviceUnits(size.ToSD());
+#else
+			return size.ToSD();
+#endif
+		}
+
+		protected sd.SizeF LogicalToDeviceUnits(SizeF size)
+		{
+#if NET9_0_OR_GREATER
+			return (size * Win32.SystemDpi).ToSD();
+#else
+			return size.ToSD();
+#endif
+		}
+		protected sd.Point LogicalToDeviceUnits(Point point)
+		{
+#if NET9_0_OR_GREATER
+			return ((sd.Point)Control.LogicalToDeviceUnits((sd.Size)point.ToSD()));
+#else
+			return point.ToSD();
+#endif
+		}
+		protected sd.PointF LogicalToDeviceUnits(PointF point)
+		{
+#if NET9_0_OR_GREATER
+			var dpi = Control.DeviceDpi;
+			return new sd.PointF((float)(point.X * 96.0 / dpi), (float)(point.Y * 96.0 / dpi));
+#else
+			return point.ToSD();
+#endif
+		}
+
+		protected int LogicalToDeviceUnits(int size)
+		{
+#if NET9_0_OR_GREATER
+			return Control.LogicalToDeviceUnits(size);
+#else
+			return size;
+#endif
+		}
 
 		// used in DrawableHandler
 		public class PanelBase<THandler> : swf.Panel
@@ -317,7 +397,7 @@ namespace Eto.WinForms.Forms
 
 		protected virtual bool SetMinimumSize(Size size)
 		{
-			var sdsize = size.ToSD();
+			var sdsize = LogicalToDeviceUnits(size);
 			if (ContainerControl.MinimumSize != sdsize)
 			{
 				ContainerControl.MinimumSize = sdsize;
@@ -580,7 +660,7 @@ namespace Eto.WinForms.Forms
 			{
 				if (!Widget.Loaded)
 					return UserPreferredSize;
-				return ContainerControl.Size.ToEto();
+				return DeviceUnitsToLogical(ContainerControl.Size);
 			}
 			set
 			{
@@ -590,7 +670,7 @@ namespace Eto.WinForms.Forms
 				if (Widget.Loaded)
 					SetScale();
 				var minset = SetMinimumSize();
-				ContainerControl.Size = value.ToSD();
+				ContainerControl.Size = LogicalToDeviceUnits(value);
 				if (minset && ContainerControl.IsHandleCreated)
 				{
 					var parent = Widget.VisualParent.GetWindowsHandler();
@@ -625,12 +705,12 @@ namespace Eto.WinForms.Forms
 			{
 				if (!Widget.Loaded)
 					return UserDesiredClientSize;
-				return Control.ClientSize.ToEto();
+				return DeviceUnitsToLogical(Control.ClientSize);
 			}
 			set
 			{
 				UserDesiredClientSize = value;
-				Control.ClientSize = value.ToSD();
+				Control.ClientSize = LogicalToDeviceUnits(value);
 			}
 		}
 
@@ -946,17 +1026,17 @@ namespace Eto.WinForms.Forms
 
 		public virtual PointF PointFromScreen(PointF point)
 		{
-			return !Control.IsDisposed ? Control.PointToClient(point.ToSDPoint()).ToEto() : PointF.Empty; // safety check added because this is hit in certain situations.
+			return !Control.IsDisposed ? DeviceUnitsToLogical(Control.PointToClient(LogicalToDeviceUnits(Point.Round(point)))) : PointF.Empty; // safety check added because this is hit in certain situations.
 		}
 
 		public virtual PointF PointToScreen(PointF point)
 		{
-			return !Control.IsDisposed ? Control.PointToScreen(point.ToSDPoint()).ToEto() : PointF.Empty; // safety check added because this is hit in certain situations.
+			return !Control.IsDisposed ? DeviceUnitsToLogical(Control.PointToScreen(LogicalToDeviceUnits(Point.Round(point)))) : PointF.Empty; // safety check added because this is hit in certain situations.
 		}
 
 		public Point Location
 		{
-			get { return Control.Location.ToEto(); }
+			get { return DeviceUnitsToLogical(Control.Location); }
 		}
 
 
@@ -975,6 +1055,12 @@ namespace Eto.WinForms.Forms
 		{
 			get { return Control.TabIndex == 0 ? int.MaxValue : Control.TabIndex - 1; }
 			set { Control.TabIndex = value == int.MaxValue ? 0 : value + 1; }
+		}
+
+		public virtual bool TabStop
+		{
+			get { return Control.TabStop; }
+			set { Control.TabStop = value; }
 		}
 
 		public virtual IEnumerable<Control> VisualControls => Enumerable.Empty<Control>();
@@ -1081,6 +1167,55 @@ namespace Eto.WinForms.Forms
 		{
 			ContainerControl.Capture = false;
 			MouseCaptured = false;
+		}
+
+		Eto.WinForms.Forms.Controls.WinFormsGestureCoordinator _gestureCoordinator;
+
+		public virtual void AddGesture(Gesture item)
+		{
+			if (item == null)
+				throw new ArgumentNullException(nameof(item));
+
+			var handler = ((IHandlerSource)item).Handler as Eto.WinForms.Forms.Controls.IWinFormsGestureHandler;
+			if (handler == null)
+				throw new NotSupportedException(string.Format(System.Globalization.CultureInfo.CurrentCulture, "Gesture '{0}' is not supported on WinForms", item.GetType().FullName));
+
+			if (_gestureCoordinator == null)
+				_gestureCoordinator = new Eto.WinForms.Forms.Controls.WinFormsGestureCoordinator(ContainerControl);
+			_gestureCoordinator.Register(handler);
+		}
+
+		public virtual void ClearGestures()
+		{
+			if (_gestureCoordinator == null)
+				return;
+
+			foreach (var gesture in Widget.Gestures)
+			{
+				if (((IHandlerSource)gesture).Handler is Eto.WinForms.Forms.Controls.IWinFormsGestureHandler handler)
+					_gestureCoordinator.Unregister(handler);
+			}
+			DisposeCoordinatorIfEmpty();
+		}
+
+		public virtual void RemoveGesture(Gesture item)
+		{
+			if (item == null || _gestureCoordinator == null)
+				return;
+			if (((IHandlerSource)item).Handler is Eto.WinForms.Forms.Controls.IWinFormsGestureHandler handler)
+			{
+				_gestureCoordinator.Unregister(handler);
+				DisposeCoordinatorIfEmpty();
+			}
+		}
+
+		void DisposeCoordinatorIfEmpty()
+		{
+			if (_gestureCoordinator != null && _gestureCoordinator.Count == 0)
+			{
+				_gestureCoordinator.Dispose();
+				_gestureCoordinator = null;
+			}
 		}
 
 	}
