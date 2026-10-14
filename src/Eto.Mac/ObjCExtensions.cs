@@ -12,14 +12,96 @@ namespace Eto.Mac
 		[DllImport("/usr/lib/libobjc.dylib")]
 		static extern bool class_addMethod(IntPtr cls, IntPtr sel, Delegate method, string argTypes);
 
+		// Native AOT generates the marshalling stub for a delegate only when it sees that delegate's
+		// type marshalled, and the Delegate parameter above names no type. So each delegate type in
+		// MarshalDelegates gets its own overload, chosen in AddMethodTyped.
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Func_IntPtr_IntPtr_IntPtr_IntPtr_bool method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Func_IntPtr_IntPtr_IntPtr method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Func_IntPtr_IntPtr_NSRange method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Func_IntPtr_IntPtr_NSRange_IntPtr_IntPtr method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Func_IntPtr_IntPtr_CGPoint_nuint method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Func_IntPtr_IntPtr_NSRange_IntPtr_CGRect method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Action_IntPtr_IntPtr_IntPtr method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Func_IntPtr_IntPtr_bool method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Func_IntPtr_IntPtr_IntPtr_bool method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Action_IntPtr_IntPtr_CGRect method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Action_IntPtr_IntPtr method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Func_IntPtr_IntPtr_IntPtr_NSDragOperation method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Action_IntPtr_IntPtr_CGSize method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Action_IntPtr_IntPtr_IntPtr_NSRange method, string argTypes);
+
+		[DllImport("/usr/lib/libobjc.dylib", EntryPoint = "class_addMethod")]
+		static extern bool class_addMethod(IntPtr cls, IntPtr sel, MarshalDelegates.Action_IntPtr_IntPtr_IntPtr_NSRange_NSRange method, string argTypes);
+
+		static bool AddMethodTyped(IntPtr cls, IntPtr sel, Delegate method, string argTypes)
+		{
+			return method switch
+			{
+				MarshalDelegates.Func_IntPtr_IntPtr_IntPtr_IntPtr_bool d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Func_IntPtr_IntPtr_IntPtr d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Func_IntPtr_IntPtr_NSRange d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Func_IntPtr_IntPtr_NSRange_IntPtr_IntPtr d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Func_IntPtr_IntPtr_CGPoint_nuint d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Func_IntPtr_IntPtr_NSRange_IntPtr_CGRect d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Action_IntPtr_IntPtr_IntPtr d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Func_IntPtr_IntPtr_bool d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Func_IntPtr_IntPtr_IntPtr_bool d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Action_IntPtr_IntPtr_CGRect d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Action_IntPtr_IntPtr d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Func_IntPtr_IntPtr_IntPtr_NSDragOperation d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Action_IntPtr_IntPtr_CGSize d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Action_IntPtr_IntPtr_IntPtr_NSRange d => class_addMethod(cls, sel, d, argTypes),
+				MarshalDelegates.Action_IntPtr_IntPtr_IntPtr_NSRange_NSRange d => class_addMethod(cls, sel, d, argTypes),
+				_ => AddMethodUntyped(cls, sel, method, argTypes),
+			};
+		}
+
+		static bool AddMethodUntyped(IntPtr cls, IntPtr sel, Delegate method, string argTypes)
+		{
+#if NET
+			// Under Native AOT the call below would fail on its own, without saying why.
+			if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported)
+				throw new NotSupportedException($"Cannot add an Objective-C method from a {method.GetType()} under Native AOT. Add a class_addMethod overload for that delegate type in ObjCExtensions.");
+#endif
+			return class_addMethod(cls, sel, method, argTypes);
+		}
+
 		public static bool AddMethod(this Class cls, IntPtr selector, Delegate method, string arguments)
 		{
-			return class_addMethod(cls.Handle, selector, method, arguments);
+			return AddMethodTyped(cls.Handle, selector, method, arguments);
 		}
 
 		public static bool AddMethod(IntPtr classHandle, IntPtr selector, Delegate method, string arguments)
 		{
-			return class_addMethod(classHandle, selector, method, arguments);
+			return AddMethodTyped(classHandle, selector, method, arguments);
 		}
 
 		[DllImport("/usr/lib/libobjc.dylib")]
