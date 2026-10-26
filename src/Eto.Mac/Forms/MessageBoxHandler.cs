@@ -71,7 +71,7 @@ namespace Eto.Mac.Forms
 			switch (Buttons)
 			{
 				case MessageBoxButtons.OK:
-					alert.AddButton(OkButton);
+					SetDefault(alert, alert.AddButton(OkButton));
 					break;
 				case MessageBoxButtons.OKCancel:
 					{
@@ -83,8 +83,11 @@ namespace Eto.Mac.Forms
 							case MessageBoxDefaultButton.Default:
 								ok.KeyEquivalent = string.Empty;
 								cancel.KeyEquivalent = "\r";
-								SetResponder(alert, ok);
+								SetDefault(alert, cancel);
 								SetCancelCode(alert, 1001);
+								break;
+							default:
+								SetDefault(alert, ok);
 								break;
 						}
 					}
@@ -99,8 +102,11 @@ namespace Eto.Mac.Forms
 							case MessageBoxDefaultButton.Default:
 								yes.KeyEquivalent = string.Empty;
 								no.KeyEquivalent = "\r";
-								SetResponder(alert, yes);
+								SetDefault(alert, no);
 								SetCancelCode(alert, 1001);
+								break;
+							default:
+								SetDefault(alert, yes);
 								break;
 						}
 					}
@@ -113,17 +119,18 @@ namespace Eto.Mac.Forms
 						switch (DefaultButton)
 						{
 							case MessageBoxDefaultButton.Yes:
+								SetDefault(alert, yes);
 								break;
 							case MessageBoxDefaultButton.No:
 								yes.KeyEquivalent = string.Empty;
 								no.KeyEquivalent = "\r";
-								SetResponder(alert, yes);
+								SetDefault(alert, no);
 								break;
 							case MessageBoxDefaultButton.Cancel:
 							case MessageBoxDefaultButton.Default:
 								yes.KeyEquivalent = string.Empty;
 								cancel.KeyEquivalent = "\r";
-								SetResponder(alert, yes);
+								SetDefault(alert, cancel);
 								SetCancelCode(alert, 1001);
 								break;
 						}
@@ -132,10 +139,13 @@ namespace Eto.Mac.Forms
 			}
 		}
 
-		private static void SetResponder(NSAlert alert, NSButton button)
+		private static void SetDefault(NSAlert alert, NSButton button)
 		{
-			// make the specified button the first responder for the window
-			// so the user can press space to select it
+			// The default button, the one Return presses, also starts with the keyboard focus, as
+			// MessageBoxDefaultButton describes. Otherwise AppKit puts the focus on another button,
+			// so a screen reader starts on (and Space or VoiceOver's activate presses) a button
+			// that is not the default.
+			alert.Window.InitialFirstResponder = button;
 			alert.Window.MakeFirstResponder(button);
 		}
 
