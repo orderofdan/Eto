@@ -57,7 +57,7 @@ namespace Eto.WinForms.Forms.Controls
 
 							if (changing)
 								ChangingText = true;
-							Text = result.ToString(h.ComputedFormatString, h.CultureInfo);
+							SetTextFromValue(result.ToString(h.ComputedFormatString, h.CultureInfo));
 							return;
 						}
 
@@ -68,7 +68,7 @@ namespace Eto.WinForms.Forms.Controls
 							Value = Math.Min(Maximum, Math.Max(Minimum, (decimal)result));
 							if (changing)
 								ChangingText = true;
-							Text = result.ToString(h.ComputedFormatString, h.CultureInfo);
+							SetTextFromValue(result.ToString(h.ComputedFormatString, h.CultureInfo));
 							return;
 						}
 					}
@@ -79,7 +79,7 @@ namespace Eto.WinForms.Forms.Controls
 						var format = h.ComputedFormatString;
 						if (changing)
 							ChangingText = true;
-						Text = val.ToString(format, h.CultureInfo);
+						SetTextFromValue(val.ToString(format, h.CultureInfo));
 						return;
 					}
 				}
@@ -87,10 +87,19 @@ namespace Eto.WinForms.Forms.Controls
 				{
 					if (changing)
 						ChangingText = true;
-					Text = Value.ToString();
+					SetTextFromValue(Value.ToString());
 					return;
 				}
 				base.UpdateEditText();
+			}
+
+			// Text written from the value is not the user's: without clearing UserEdit, which the text box sets
+			// when its text changes, the next value set from code would be replaced by this text parsed back.
+			// NumericUpDown.ParseEditText clears it the same way after reading the user's text.
+			void SetTextFromValue(string text)
+			{
+				Text = text;
+				UserEdit = false;
 			}
 
 			protected override void UpdateEditText()

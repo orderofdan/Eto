@@ -258,6 +258,32 @@ namespace Eto.Test.UnitTests.Forms.Controls
 				Assert.That(numericStepper.Value, Is.EqualTo(10));
 			});
 		}
+		[Test]
+		public void ValueSetFromCodeShouldStickWithFormatString()
+		{
+			NumericStepper numericStepper = null;
+			Shown(form =>
+			{
+				numericStepper = new NumericStepper
+				{
+					MinValue = -144,
+					MaxValue = 12,
+					DecimalPlaces = 1,
+					FormatString = "+0.0 dB;-0.0 dB;0.0 dB"
+				};
+				numericStepper.Value = -0.5;
+				form.Content = numericStepper;
+			},
+			() =>
+			{
+				Assert.That(numericStepper.Value, Is.EqualTo(-0.5), "#1");
+				numericStepper.Value = 7;
+				Assert.That(numericStepper.Value, Is.EqualTo(7), "#2");
+				numericStepper.Value = -12;
+				Assert.That(numericStepper.Value, Is.EqualTo(-12), "#3");
+			});
+		}
+
 		[Test, ManualTest]
 		public void SettingValueInChangedHandlerShouldStickWhenTyped()
 		{
