@@ -51,6 +51,25 @@ namespace Eto.WinForms
 			}
 		}
 
+		/// <summary>
+		/// The control a key goes to: the control itself, or, when the focus is in a native part of an Eto control (the
+		/// text box inside a NumericStepper), the Eto control it is part of. Otherwise such a part raises no key events,
+		/// and its parents get none either, so a dialog's AbortButton never sees Escape there.
+		/// </summary>
+		public Control KeyControl
+		{
+			get
+			{
+				for (var child = WinControl; child != null; child = child.Parent)
+				{
+					var control = ToEto(child);
+					if (control != null)
+						return control;
+				}
+				return null;
+			}
+		}
+
 		public BubbleEventArgs(swf.Message message, swf.Control winControl)
 		{
 			this.Message = message;
@@ -164,11 +183,12 @@ namespace Eto.WinForms
 			
 			char? keyChar = null;
 			var kevt = new KeyEventArgs(keyData, keyEventType, keyChar);
-			if (be.Control != null)
-				action(be.Control, (Control.ICallback)((ICallbackSource)be.Control).Callback, kevt);
-			if (!kevt.Handled && (keyEventType != KeyEventType.KeyDown || !IsInputKey(be.Message.HWnd, keyData)))
+			var keyControl = be.KeyControl;
+			if (keyControl != null)
+				action(keyControl, (Control.ICallback)((ICallbackSource)keyControl).Callback, kevt);
+			if (!kevt.Handled && keyControl != null && (keyEventType != KeyEventType.KeyDown || !IsInputKey(be.Message.HWnd, keyData)))
 			{
-				foreach (var control in be.Parents)
+				for (var control = keyControl.VisualParent; control != null; control = control.VisualParent)
 				{
 					var callback = (Control.ICallback)((ICallbackSource)control).Callback;
 					action(control, callback, kevt);
@@ -213,11 +233,12 @@ namespace Eto.WinForms
 		{
 			char keyChar = (char)((long)be.Message.WParam);
 			var kevt = new KeyEventArgs(Keys.None, keyEventType, keyChar);
-			if (be.Control != null)
-				action(be.Control, (Control.ICallback)((ICallbackSource)be.Control).Callback, kevt);
-			if (!kevt.Handled && !IsInputChar(be.Message.HWnd, keyChar))
+			var keyControl = be.KeyControl;
+			if (keyControl != null)
+				action(keyControl, (Control.ICallback)((ICallbackSource)keyControl).Callback, kevt);
+			if (!kevt.Handled && keyControl != null && !IsInputChar(be.Message.HWnd, keyChar))
 			{
-				foreach (var control in be.Parents)
+				for (var control = keyControl.VisualParent; control != null; control = control.VisualParent)
 				{
 					var callback = (Control.ICallback)((ICallbackSource)control).Callback;
 					action(control, callback, kevt);
