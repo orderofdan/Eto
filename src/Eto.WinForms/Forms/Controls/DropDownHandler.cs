@@ -104,7 +104,7 @@ namespace Eto.WinForms.Forms.Controls
 				e.DrawBackground();
 			}
 
-			if (e.Index >= 0)
+			if (e.Index >= 0 && e.Index < Items.Count)
 			{
 				var item = Items[e.Index];
 				var bounds = e.Bounds;
